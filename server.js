@@ -91,3 +91,34 @@ app.listen(port, () => {
     console.log(`📍 Endpoint for MT4: http://localhost:${port}/api/receive_signal`);
     console.log(`📊 Dashboard: http://localhost:${port}/`);
 });
+
+// Добавьте этот код после других маршрутов
+app.get('/api/receive_signal', (req, res) => {
+    try {
+        const { asset, signal } = req.query; // GET параметры
+        
+        if (!asset || !signal) {
+            return res.status(400).json({ error: 'Missing asset or signal parameters' });
+        }
+
+        const newSignal = {
+            id: ++signalCount,
+            asset,
+            signal,
+            timestamp: new Date(),
+            source: 'GET Request'
+        };
+
+        signals.push(newSignal);
+        
+        console.log('📨 GET Signal received:', newSignal);
+        res.status(200).json({ 
+            message: 'GET Signal received successfully',
+            signal: newSignal
+        });
+
+    } catch (error) {
+        console.error('Error processing GET signal:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});

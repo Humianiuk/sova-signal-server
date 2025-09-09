@@ -573,4 +573,5 @@ app.listen(port, () => {
   console.log(`📍 Endpoint for MT4: http://localhost:${port}/api/receive_signal`);
   console.log(`📍 Auto-activate endpoint: http://localhost:${port}/api/auto-activate`);
   console.log(`📊 Dashboard: http://localhost:${port}/`);
+
 });

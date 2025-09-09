@@ -13,6 +13,7 @@ app.use(express.urlencoded({ extended: true }));
 // Секретные ключи
 const JWT_SECRET = process.env.JWT_SECRET || 'sova-trade-secret-key-2024';
 const AUTO_ACTIVATE_SECRET = process.env.AUTO_ACTIVATE_SECRET || 'auto-activate-secret-key-2024';
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'admin-secret-key-2024';
 
 // Хранилище данных
 let signals = [];
@@ -53,6 +54,15 @@ const checkSubscription = (req, res, next) => {
     return res.status(403).json({ error: 'Подписка истекла' });
   }
   
+  next();
+};
+
+// Middleware для проверки админских прав
+const requireAdmin = (req, res, next) => {
+  const adminToken = req.headers['admin-token'];
+  if (adminToken !== ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
   next();
 };
 
@@ -325,38 +335,7 @@ app.get('/api/check-subscription-by-email', (req, res) => {
   });
 });
 
-// Маршрут для проверки работы сервера
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'SOVA Signal Server is running! 🚀',
-    endpoints: {
-      register: 'POST /api/register',
-      login: 'POST /api/login',
-      auto_activate: 'POST /api/auto-activate',
-      receive_signal: 'POST /api/receive_signal',
-      get_signals: 'GET /api/get_signals',
-      subscription_status: 'GET /api/subscription_status',
-      check_subscription: 'GET /api/check-subscription-by-email'
-    },
-    stats: {
-      total_signals: signals.length,
-      total_users: users.length,
-      active_subscriptions: subscriptions.filter(sub => sub.status === 'active').length,
-      last_signal: signals.length > 0 ? signals[signals.length-1] : null
-    }
-  });
-});
-
-// Добавляем после других маршрутов в server.js
-
-// Middleware для проверки админских прав
-const requireAdmin = (req, res, next) => {
-  const adminToken = req.headers['admin-token'];
-  if (adminToken !== 'admin-secret-key-2024') {
-    return res.status(403).json({ error: 'Admin access required' });
-  }
-  next();
-};
+// ==================== АДМИН-ЭНДПОИНТЫ ====================
 
 // Получение всех пользователей с подписками
 app.get('/admin/users', requireAdmin, (req, res) => {
@@ -378,7 +357,6 @@ app.get('/admin/users', requireAdmin, (req, res) => {
       };
     });
 
-    // Сортируем по дате создания (новые сверху)
     usersWithSubscriptions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.json({
@@ -404,25 +382,18 @@ app.get('/admin/stats', requireAdmin, (req, res) => {
     totalSubscriptions: subscriptions.length,
     activeSubscriptions: activeSubs.length,
     expiredSubscriptions: subscriptions.filter(sub => sub.status === 'expired').length,
-    
-    // Статистика по срокам подписок
     expiringThisWeek: activeSubs.filter(sub => {
       const daysLeft = Math.ceil((new Date(sub.expiresAt) - now) / (1000 * 60 * 60 * 24));
       return daysLeft <= 7 && daysLeft > 0;
     }).length,
-    
     expiredRecently: subscriptions.filter(sub => {
       const daysAgo = Math.ceil((now - new Date(sub.expiresAt)) / (1000 * 60 * 60 * 24));
       return sub.status === 'expired' && daysAgo <= 7;
     }).length,
-    
-    // Доходы (примерные)
     totalRevenue: subscriptions.reduce((sum, sub) => sum + (sub.amount || 0), 0),
     monthlyRevenue: subscriptions
       .filter(sub => new Date(sub.activatedAt) > new Date(now.getFullYear(), now.getMonth(), 1))
       .reduce((sum, sub) => sum + (sub.amount || 0), 0),
-    
-    // По платежным системам
     byPaymentSystem: subscriptions.reduce((acc, sub) => {
       acc[sub.paymentSystem] = (acc[sub.paymentSystem] || 0) + 1;
       return acc;
@@ -526,6 +497,30 @@ app.get('/admin/search', requireAdmin, (req, res) => {
   });
 });
 
+// Маршрут для проверки работы сервера
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'SOVA Signal Server is running! 🚀',
+    endpoints: {
+      register: 'POST /api/register',
+      login: 'POST /api/login',
+      auto_activate: 'POST /api/auto-activate',
+      receive_signal: 'POST /api/receive_signal',
+      get_signals: 'GET /api/get_signals',
+      subscription_status: 'GET /api/subscription_status',
+      check_subscription: 'GET /api/check-subscription-by-email',
+      admin_users: 'GET /admin/users',
+      admin_stats: 'GET /admin/stats'
+    },
+    stats: {
+      total_signals: signals.length,
+      total_users: users.length,
+      active_subscriptions: subscriptions.filter(sub => sub.status === 'active').length,
+      last_signal: signals.length > 0 ? signals[signals.length-1] : null
+    }
+  });
+});
+
 // Статистика
 app.get('/api/stats', (req, res) => {
   const buySignals = signals.filter(s => s.signal === 'buy').length;
@@ -574,6 +569,7 @@ app.get('/api/receive_signal', (req, res) => {
 app.listen(port, () => {
   console.log(`🚀 SOVA Signal Server running on port ${port}`);
   console.log(`📍 Auto-activation secret: ${AUTO_ACTIVATE_SECRET}`);
+  console.log(`📍 Admin secret: ${ADMIN_SECRET}`);
   console.log(`📍 Endpoint for MT4: http://localhost:${port}/api/receive_signal`);
   console.log(`📍 Auto-activate endpoint: http://localhost:${port}/api/auto-activate`);
   console.log(`📊 Dashboard: http://localhost:${port}/`);

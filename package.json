@@ -1,14 +1,22 @@
 {
   "name": "sova-signal-server",
   "version": "1.0.0",
-  "description": "Server for SOVA trading signals",
+  "description": "Server for SOVA trading signals + Core",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "migrate": "node src/migrate.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "sequelize": "^6.37.0",
+    "pg": "^8.11.0",
+    "pg-hstore": "^2.3.4",
+    "dotenv": "^16.4.0",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "axios": "^1.7.0"
   },
   "engines": {
     "node": "18.x"

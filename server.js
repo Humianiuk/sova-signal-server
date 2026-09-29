@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { sequelize, Signal, License, Product, Referral } = require('./src/models');
+const { sequelize, Signal, License, Product, Referral, Plan } = require('./src/models');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -107,6 +107,124 @@ app.post('/api/license/check', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// ============ ГЕНЕРАЦИЯ ЛИЦЕНЗИЙ (только для админа) ============
+
+const crypto = require('crypto');
+
+function generateKey() {
+  // Формат: SOVA-XXXX-XXXX-XXXX-XXXX
+  const part = () => crypto.randomBytes(2).toString('hex').toUpperCase();
+  return `SOVA-${part()}-${part()}-${part()}-${part()}`;
+}
+
+function checkAdmin(req, res, next) {
+  const secret = req.headers['x-admin-secret'] || req.query.admin_secret;
+  if (secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+}
+
+// Создать лицензию
+app.post('/api/license/create', checkAdmin, async (req, res) => {
+  try {
+    const { product_code, plan_code = 'demo', email, telegram_id, duration_days } = req.body;
+    if (!product_code) {
+      return res.status(400).json({ error: 'Missing product_code' });
+    }
+
+    const product = await Product.findOne({ where: { code: product_code } });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    const plan = await Plan.findOne({ where: { code: plan_code } });
+    if (!plan) return res.status(404).json({ error: 'Plan not found' });
+
+    // Найти или создать пользователя
+    let user = null;
+    if (email || telegram_id) {
+      const { User } = require('./src/models');
+      [user] = await User.findOrCreate({
+        where: email ? { email } : { telegram_id },
+        defaults: { email, telegram_id, name: email || telegram_id },
+      });
+    }
+
+    // Расчёт срока действия
+    const days = duration_days || plan.duration_days;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + days);
+
+    // Создать лицензию
+    const key = generateKey();
+    const license = await License.create({
+      key,
+      user_id: user ? user.id : null,
+      product_id: product.id,
+      plan_code: plan.code,
+      expires_at: expiresAt,
+      is_active: true,
+    });
+
+    res.json({
+      status: 'ok',
+      license: {
+        key: license.key,
+        product: product.code,
+        plan: plan.code,
+        expires_at: license.expires_at,
+        user_id: license.user_id,
+      },
+    });
+  } catch (error) {
+    console.error('License create error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Список лицензий
+app.get('/api/license/list', checkAdmin, async (req, res) => {
+  try {
+    const { product_code, limit = 100 } = req.query;
+    const where = {};
+    if (product_code) {
+      const product = await Product.findOne({ where: { code: product_code } });
+      if (product) where.product_id = product.id;
+    }
+
+    const licenses = await License.findAll({
+      where,
+      order: [['createdAt', 'DESC']],
+      limit: parseInt(limit),
+      include: [{ model: Product, attributes: ['code', 'name'] }],
+    });
+
+    res.json({ total: licenses.length, licenses });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Деактивировать лицензию
+app.post('/api/license/deactivate', checkAdmin, async (req, res) => {
+  try {
+    const { key } = req.body;
+    if (!key) return res.status(400).json({ error: 'Missing key' });
+
+    const license = await License.findOne({ where: { key } });
+    if (!license) return res.status(404).json({ error: 'License not found' });
+
+    await license.update({ is_active: false });
+    res.json({ status: 'ok', message: 'Лицензия деактивирована' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
 
 // ============ РЕФЕРАЛЫ ============
 

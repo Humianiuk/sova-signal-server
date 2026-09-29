@@ -251,8 +251,7 @@ app.post('/api/payment/create', async (req, res) => {
         checkout: {
           transaction_type: 'payment',
           attempts: 3,
-          test: false,
-          iframe: true,
+          test: false, // Для реальных платежей
           order: {
             currency: plan.currency,
             amount: amount,
@@ -262,6 +261,15 @@ app.post('/api/payment/create', async (req, res) => {
           settings: {
             notification_url: 'https://sova-signal-server.onrender.com/api/payment/webhook',
             return_url: 'https://sovabot.com/payment/success',
+            // ДОБАВЛЕНО: Настройки пользовательского соглашения
+            agreement_toggle: {
+              value: true, // Пользователь должен согласиться
+              text: 'Я согласен с условиями предоставления услуг',
+            },
+          },
+          // ДОБАВЛЕНО: Явное указание способов оплаты
+          payment_method: {
+            types: ['credit_card'],
           },
           customer: {
             email: email || undefined,

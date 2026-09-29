@@ -251,7 +251,7 @@ app.post('/api/payment/create', async (req, res) => {
         checkout: {
           transaction_type: 'payment',
           attempts: 3,
-          test: true, // TODO: заменить на false для боевых платежей
+          test: false, // TODO: заменить на false для боевых платежей
           order: {
             currency: plan.currency,
             amount: amount,

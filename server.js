@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const axios = require('axios');
+const { Op } = require('sequelize');
 const {
   sequelize,
   Signal,
@@ -352,10 +352,34 @@ app.post('/api/payment/webhook', async (req, res) => {
     }
 
     console.log('📨 BePaid Webhook:', transaction.uid, '| status:', transaction.status);
+    console.log('🔍 Webhook payload:', JSON.stringify(transaction, null, 2));
 
-    const payment = await Payment.findOne({
-      where: { provider_payment_id: transaction.uid },
-    });
+    let payment = null;
+
+    // Пробуем найти по tracking_id (основной путь)
+    if (transaction.tracking_id) {
+      payment = await Payment.findOne({
+        where: {
+          raw_payload: {
+            [Op.contains]: { tracking_id: transaction.tracking_id },
+          },
+        },
+      });
+    }
+
+    // Фолбэк: поиск по provider_payment_id (checkout token)
+    if (!payment) {
+      payment = await Payment.findOne({
+        where: { provider_payment_id: transaction.uid },
+      });
+    }
+
+    // Фолбэк: поиск по provider_payment_id = token (если BePaid его пришлёт в webhook)
+    if (!payment && transaction.token) {
+      payment = await Payment.findOne({
+        where: { provider_payment_id: transaction.token },
+      });
+    }
 
     if (!payment) {
       console.warn('⚠️ Payment not found for uid:', transaction.uid);

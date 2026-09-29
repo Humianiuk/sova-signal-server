@@ -251,7 +251,7 @@ app.post('/api/payment/create', async (req, res) => {
         checkout: {
           transaction_type: 'payment',
           attempts: 3,
-          test: false, // Для реальных платежей
+          test: false,
           order: {
             currency: plan.currency,
             amount: amount,
@@ -261,13 +261,11 @@ app.post('/api/payment/create', async (req, res) => {
           settings: {
             notification_url: 'https://sova-signal-server.onrender.com/api/payment/webhook',
             return_url: 'https://sovabot.com/payment/success',
-            // ДОБАВЛЕНО: Настройки пользовательского соглашения
             agreement_toggle: {
-              value: true, // Пользователь должен согласиться
+              value: true,
               text: 'Я согласен с условиями предоставления услуг',
             },
           },
-          // ДОБАВЛЕНО: Явное указание способов оплаты
           payment_method: {
             types: ['credit_card'],
           },
@@ -289,12 +287,19 @@ app.post('/api/payment/create', async (req, res) => {
       }
     );
 
-    const paymentUrl = bepaidResponse.data?.checkout?.redirect_url;
+    const paymentUrlRaw = bepaidResponse.data?.checkout?.redirect_url;
     const token = bepaidResponse.data?.checkout?.token;
 
-    if (!paymentUrl) {
+    if (!paymentUrlRaw) {
       console.error('BePaid response missing redirect_url:', bepaidResponse.data);
       return res.status(500).json({ error: 'Payment gateway error', details: bepaidResponse.data });
+    }
+
+    // Преобразуем ссылку виджета в ссылку страницы оплаты
+    let paymentUrl = paymentUrlRaw;
+    if (paymentUrl.includes('/widget/hpp.html')) {
+      paymentUrl = `https://checkout.bepaid.by/v2/checkout?token=${token}`;
+      console.log('🔄 Widget URL converted to:', paymentUrl);
     }
 
     const payment = await Payment.create({
@@ -315,6 +320,7 @@ app.post('/api/payment/create', async (req, res) => {
     res.json({
       status: 'ok',
       payment_url: paymentUrl,
+      payment_url_raw: paymentUrlRaw,
       payment_id: payment.id,
       tracking_id: trackingId,
     });

@@ -1,7 +1,18 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { sequelize, Signal, License, Product, Referral, Plan } = require('./src/models');
+const crypto = require('crypto');
+const axios = require('axios');
+const {
+  sequelize,
+  Signal,
+  License,
+  Product,
+  Referral,
+  Plan,
+  Payment,
+  User,
+} = require('./src/models');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -9,6 +20,21 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// ============ УТИЛИТЫ ============
+
+function generateKey() {
+  const part = () => crypto.randomBytes(2).toString('hex').toUpperCase();
+  return `SOVA-${part()}-${part()}-${part()}-${part()}`;
+}
+
+function checkAdmin(req, res, next) {
+  const secret = req.headers['x-admin-secret'] || req.query.admin_secret;
+  if (secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+}
 
 // ============ СИГНАЛЫ ============
 
@@ -110,23 +136,6 @@ app.post('/api/license/check', async (req, res) => {
 
 // ============ ГЕНЕРАЦИЯ ЛИЦЕНЗИЙ (только для админа) ============
 
-const crypto = require('crypto');
-
-function generateKey() {
-  // Формат: SOVA-XXXX-XXXX-XXXX-XXXX
-  const part = () => crypto.randomBytes(2).toString('hex').toUpperCase();
-  return `SOVA-${part()}-${part()}-${part()}-${part()}`;
-}
-
-function checkAdmin(req, res, next) {
-  const secret = req.headers['x-admin-secret'] || req.query.admin_secret;
-  if (secret !== process.env.ADMIN_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-  next();
-}
-
-// Создать лицензию
 app.post('/api/license/create', checkAdmin, async (req, res) => {
   try {
     const { product_code, plan_code = 'demo', email, telegram_id, duration_days } = req.body;
@@ -140,22 +149,18 @@ app.post('/api/license/create', checkAdmin, async (req, res) => {
     const plan = await Plan.findOne({ where: { code: plan_code } });
     if (!plan) return res.status(404).json({ error: 'Plan not found' });
 
-    // Найти или создать пользователя
     let user = null;
     if (email || telegram_id) {
-      const { User } = require('./src/models');
       [user] = await User.findOrCreate({
         where: email ? { email } : { telegram_id },
         defaults: { email, telegram_id, name: email || telegram_id },
       });
     }
 
-    // Расчёт срока действия
     const days = duration_days || plan.duration_days;
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + days);
 
-    // Создать лицензию
     const key = generateKey();
     const license = await License.create({
       key,
@@ -182,7 +187,6 @@ app.post('/api/license/create', checkAdmin, async (req, res) => {
   }
 });
 
-// Список лицензий
 app.get('/api/license/list', checkAdmin, async (req, res) => {
   try {
     const { product_code, limit = 100 } = req.query;
@@ -206,7 +210,6 @@ app.get('/api/license/list', checkAdmin, async (req, res) => {
   }
 });
 
-// Деактивировать лицензию
 app.post('/api/license/deactivate', checkAdmin, async (req, res) => {
   try {
     const { key } = req.body;
@@ -223,8 +226,188 @@ app.post('/api/license/deactivate', checkAdmin, async (req, res) => {
   }
 });
 
+// ============ ПЛАТЕЖИ (BePaid) ============
 
+app.post('/api/payment/create', async (req, res) => {
+  try {
+    const { product_code, plan_code, email, telegram_id } = req.body;
 
+    if (!product_code || !plan_code || (!email && !telegram_id)) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const product = await Product.findOne({ where: { code: product_code } });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    const plan = await Plan.findOne({ where: { code: plan_code } });
+    if (!plan) return res.status(404).json({ error: 'Plan not found' });
+
+    const amount = Math.round(plan.price * 100);
+    const trackingId = `${product_code}_${plan_code}_${Date.now()}`;
+
+    const bepaidResponse = await axios.post(
+      'https://checkout.bepaid.by/ctp/api/checkouts',
+      {
+        checkout: {
+          transaction_type: 'payment',
+          attempts: 3,
+          test: true, // TODO: заменить на false для боевых платежей
+          order: {
+            currency: plan.currency,
+            amount: amount,
+            description: `${product.name} - ${plan.name}`,
+            tracking_id: trackingId,
+          },
+          settings: {
+            notification_url: 'https://sova-signal-server.onrender.com/api/payment/webhook',
+            return_url: 'https://sovabot.com/payment/success',
+          },
+          customer: {
+            email: email || undefined,
+            ...(telegram_id ? { phone: undefined } : {}),
+          },
+        },
+      },
+      {
+        auth: {
+          username: process.env.BEPAID_SHOP_ID,
+          password: process.env.BEPAID_SECRET_KEY,
+        },
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      }
+    );
+
+    const paymentUrl = bepaidResponse.data?.checkout?.redirect_url;
+    const token = bepaidResponse.data?.checkout?.token;
+
+    if (!paymentUrl) {
+      console.error('BePaid response missing redirect_url:', bepaidResponse.data);
+      return res.status(500).json({ error: 'Payment gateway error' });
+    }
+
+    const payment = await Payment.create({
+      amount: plan.price,
+      currency: plan.currency,
+      status: 'pending',
+      provider: 'bepaid',
+      provider_payment_id: token,
+      raw_payload: {
+        tracking_id: trackingId,
+        product_code,
+        plan_code,
+        email,
+        telegram_id,
+      },
+    });
+
+    res.json({
+      status: 'ok',
+      payment_url: paymentUrl,
+      payment_id: payment.id,
+      tracking_id: trackingId,
+    });
+  } catch (error) {
+    console.error('BePaid create payment error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Internal server error', details: error.response?.data });
+  }
+});
+
+app.post('/api/payment/webhook', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Basic ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const base64Credentials = authHeader.split(' ')[1];
+    const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+    const [shopId, secretKey] = credentials.split(':');
+
+    if (shopId !== process.env.BEPAID_SHOP_ID || secretKey !== process.env.BEPAID_SECRET_KEY) {
+      console.warn('❌ Webhook: Invalid credentials');
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { transaction } = req.body;
+    if (!transaction) {
+      return res.status(200).json({ status: 'ok', warning: 'no transaction' });
+    }
+
+    console.log('📨 BePaid Webhook:', transaction.uid, '| status:', transaction.status);
+
+    const payment = await Payment.findOne({
+      where: { provider_payment_id: transaction.uid },
+    });
+
+    if (!payment) {
+      console.warn('⚠️ Payment not found for uid:', transaction.uid);
+      return res.status(200).json({ status: 'ok', warning: 'payment not found' });
+    }
+
+    await payment.update({
+      status: transaction.status === 'successful' ? 'paid' : transaction.status,
+      raw_payload: { ...payment.raw_payload, webhook: transaction },
+    });
+
+    if (transaction.status !== 'successful') {
+      console.log('ℹ️ Non-successful payment, license not issued');
+      return res.status(200).json({ status: 'ok' });
+    }
+
+    // ===== ВЫДАЧА ЛИЦЕНЗИИ =====
+    const meta = payment.raw_payload || {};
+    const { product_code, plan_code, email, telegram_id } = meta;
+
+    if (!product_code || !plan_code) {
+      console.error('❌ Missing product_code/plan_code in payment meta');
+      return res.status(200).json({ status: 'ok', warning: 'missing meta' });
+    }
+
+    const product = await Product.findOne({ where: { code: product_code } });
+    const plan = await Plan.findOne({ where: { code: plan_code } });
+
+    if (!product || !plan) {
+      console.error('❌ Product or Plan not found');
+      return res.status(200).json({ status: 'ok', warning: 'product/plan not found' });
+    }
+
+    let user = null;
+    if (email || telegram_id) {
+      [user] = await User.findOrCreate({
+        where: email ? { email } : { telegram_id },
+        defaults: { email, telegram_id, name: email || telegram_id },
+      });
+    }
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + plan.duration_days);
+
+    const key = generateKey();
+    const license = await License.create({
+      key,
+      user_id: user ? user.id : null,
+      product_id: product.id,
+      plan_code: plan.code,
+      expires_at: expiresAt,
+      is_active: true,
+    });
+
+    await payment.update({
+      user_id: user ? user.id : null,
+      product_id: product.id,
+      plan_id: plan.id,
+    });
+
+    console.log('✅ ЛИЦЕНЗИЯ ВЫДАНА:', key, '| email:', email, '| product:', product_code);
+
+    // TODO: отправка ключа на email или в Telegram
+
+    res.status(200).json({ status: 'ok', license_key: key });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // ============ РЕФЕРАЛЫ ============
 
@@ -256,6 +439,11 @@ app.get('/', async (req, res) => {
         get_signals: 'GET /api/get_signals',
         stats: 'GET /api/stats',
         license_check: 'POST /api/license/check',
+        license_create: 'POST /api/license/create',
+        license_list: 'GET /api/license/list',
+        license_deactivate: 'POST /api/license/deactivate',
+        payment_create: 'POST /api/payment/create',
+        payment_webhook: 'POST /api/payment/webhook',
         referral_track: 'POST /api/referral/track',
       },
       stats: { total_signals: total },

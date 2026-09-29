@@ -251,7 +251,8 @@ app.post('/api/payment/create', async (req, res) => {
         checkout: {
           transaction_type: 'payment',
           attempts: 3,
-          test: false, // TODO: заменить на false для боевых платежей
+          test: false,
+          iframe: true,
           order: {
             currency: plan.currency,
             amount: amount,
@@ -264,7 +265,6 @@ app.post('/api/payment/create', async (req, res) => {
           },
           customer: {
             email: email || undefined,
-            ...(telegram_id ? { phone: undefined } : {}),
           },
         },
       },
@@ -273,7 +273,11 @@ app.post('/api/payment/create', async (req, res) => {
           username: process.env.BEPAID_SHOP_ID,
           password: process.env.BEPAID_SECRET_KEY,
         },
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-API-Version': '2',
+        },
       }
     );
 
@@ -282,7 +286,7 @@ app.post('/api/payment/create', async (req, res) => {
 
     if (!paymentUrl) {
       console.error('BePaid response missing redirect_url:', bepaidResponse.data);
-      return res.status(500).json({ error: 'Payment gateway error' });
+      return res.status(500).json({ error: 'Payment gateway error', details: bepaidResponse.data });
     }
 
     const payment = await Payment.create({
@@ -354,7 +358,6 @@ app.post('/api/payment/webhook', async (req, res) => {
       return res.status(200).json({ status: 'ok' });
     }
 
-    // ===== ВЫДАЧА ЛИЦЕНЗИИ =====
     const meta = payment.raw_payload || {};
     const { product_code, plan_code, email, telegram_id } = meta;
 
@@ -399,8 +402,6 @@ app.post('/api/payment/webhook', async (req, res) => {
     });
 
     console.log('✅ ЛИЦЕНЗИЯ ВЫДАНА:', key, '| email:', email, '| product:', product_code);
-
-    // TODO: отправка ключа на email или в Telegram
 
     res.status(200).json({ status: 'ok', license_key: key });
   } catch (error) {

@@ -115,7 +115,6 @@ app.post('/api/license/check', async (req, res) => {
       return res.json({ status: 'expired', message: 'Лицензия истекла' });
     }
 
-    // Привязка: первый запуск — привязываем; последующие — проверяем
     if (!license.device_id && !license.account_number) {
       const updates = {};
       if (device_id) updates.device_id = device_id;
@@ -306,20 +305,70 @@ app.get('/api/admin/products', checkAdmin, async (req, res) => {
 
 app.post('/api/admin/product/update', checkAdmin, async (req, res) => {
   try {
-    const { code, referral_url, is_active, name, description } = req.body;
+    const { code } = req.body;
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
     const product = await Product.findOne({ where: { code } });
     if (!product) return res.status(404).json({ error: 'Product not found' });
 
+    const allowed = [
+      'name', 'version', 'category', 'platform', 'short_description', 'description',
+      'price_usd', 'referral_url',
+      'video_preview_url', 'video_payment_url', 'video_install_url', 'video_usage_url',
+      'social_url', 'download_url', 'faq_url',
+      'payment_crypto', 'payment_yoomoney', 'payment_sber',
+      'install_text', 'usage_text', 'payment_text',
+      'is_active',
+    ];
     const updates = {};
-    if (referral_url !== undefined) updates.referral_url = referral_url || null;
-    if (is_active !== undefined) updates.is_active = is_active;
-    if (name) updates.name = name;
-    if (description !== undefined) updates.description = description || null;
+    for (const field of allowed) {
+      if (req.body[field] !== undefined) {
+        updates[field] = (req.body[field] === '') ? null : req.body[field];
+      }
+    }
 
     await product.update(updates);
     res.json({ status: 'ok', product });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/admin/product/create', checkAdmin, async (req, res) => {
+  try {
+    const { code, name } = req.body;
+    if (!code || !name) {
+      return res.status(400).json({ error: 'Missing code or name' });
+    }
+
+    const exists = await Product.findOne({ where: { code } });
+    if (exists) return res.status(409).json({ error: 'Product with this code already exists' });
+
+    const product = await Product.create(req.body);
+    res.json({ status: 'ok', product });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+app.post('/api/admin/product/delete', checkAdmin, async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: 'Missing code' });
+
+    const product = await Product.findOne({ where: { code } });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    const licensesCount = await License.count({ where: { product_id: product.id } });
+    if (licensesCount > 0) {
+      await product.update({ is_active: false });
+      return res.json({ status: 'ok', message: `Продукт выключен (у него ${licensesCount} лицензий)` });
+    }
+
+    await product.destroy();
+    res.json({ status: 'ok', message: 'Продукт удалён' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
@@ -653,11 +702,11 @@ const ADMIN_HTML = `<!DOCTYPE html>
   .badge.gray { background: #eee; color: #666; }
   .empty { text-align: center; padding: 40px; color: #999; background: #fff; border-radius: 10px; }
   .key { font-family: monospace; font-size: 12px; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
-  .refresh { margin-bottom: 16px; display: flex; gap: 8px; }
+  .refresh { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
   .refresh button, .btn { padding: 8px 14px; border-radius: 6px; border: 1px solid #ddd; background: #fff; cursor: pointer; font-size: 13px; }
   .refresh button:hover, .btn:hover { background: #f5f5f5; }
- .btn-primary:hover, .refresh .btn-primary:hover { background: #e08600; }
-  .btn-primary:hover { background: #e08600; }
+  .btn-primary, .refresh .btn-primary { background: #ff9500; color: #fff; border-color: #ff9500; }
+  .btn-primary:hover, .refresh .btn-primary:hover { background: #e08600; }
   .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 4px; }
   .btn-danger { color: #8a1a1a; }
   .btn-success { color: #1a7a1a; }
@@ -678,6 +727,17 @@ const ADMIN_HTML = `<!DOCTYPE html>
   .toast.ok { background: #1a7a1a; }
   .toast.err { background: #8a1a1a; }
   .bind-info { font-size: 11px; color: #888; font-family: monospace; }
+  .section-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #888;
+    margin: 18px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #eee;
+  }
+  .section-title:first-of-type { margin-top: 0; }
+
   /* ============ MOBILE / ADAPTIVE ============ */
 
   @media (max-width: 900px) {
@@ -685,7 +745,6 @@ const ADMIN_HTML = `<!DOCTYPE html>
   }
 
   @media (max-width: 768px) {
-    /* Шапка */
     .header { flex-direction: column; gap: 10px; align-items: stretch; padding: 12px 14px; }
     .header h1 { font-size: 17px; text-align: center; }
     .header .secret { width: 100%; }
@@ -693,7 +752,6 @@ const ADMIN_HTML = `<!DOCTYPE html>
     .header button { padding: 8px 14px; }
     .status-msg { display: none; }
 
-    /* Табы — скролл по горизонтали */
     .tabs {
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
@@ -703,20 +761,16 @@ const ADMIN_HTML = `<!DOCTYPE html>
     .tabs::-webkit-scrollbar { display: none; }
     .tab { padding: 12px 14px; font-size: 13px; white-space: nowrap; }
 
-    /* Контент */
     .content { padding: 12px; }
 
-    /* Карточки дашборда — 2 в ряд */
     .cards { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
     .card { padding: 14px; }
     .card .label { font-size: 10px; }
     .card .value { font-size: 22px; }
 
-    /* Кнопки над таблицей */
     .refresh { flex-wrap: wrap; gap: 6px; }
     .refresh button, .btn { padding: 7px 12px; font-size: 12px; }
 
-    /* Таблицы — горизонтальный скролл */
     #licensesTable, #paymentsTable, #usersTable, #signalsTable, #productsTable {
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
@@ -729,7 +783,6 @@ const ADMIN_HTML = `<!DOCTYPE html>
     table th { padding: 10px 8px; font-size: 10px; }
     table td { padding: 10px 8px; font-size: 12px; }
 
-    /* Модалки */
     .modal-bg { padding: 12px; align-items: flex-start; padding-top: 40px; overflow-y: auto; }
     .modal { max-width: 100%; padding: 18px; border-radius: 10px; }
     .modal h2 { font-size: 16px; }
@@ -737,14 +790,13 @@ const ADMIN_HTML = `<!DOCTYPE html>
     .modal .actions { flex-direction: column-reverse; gap: 6px; }
     .modal .actions button { width: 100%; padding: 10px; }
 
-    /* Toast */
     .toast { left: 12px; right: 12px; bottom: 12px; text-align: center; font-size: 13px; }
   }
 
   @media (max-width: 380px) {
     .cards { grid-template-columns: 1fr; }
     .header h1 { font-size: 15px; }
-  }  
+  }
 </style>
 </head>
 <body>
@@ -781,7 +833,10 @@ const ADMIN_HTML = `<!DOCTYPE html>
   </div>
 
   <div class="panel" id="panel-products">
-    <div class="refresh"><button onclick="loadProducts()">🔄 Обновить</button></div>
+    <div class="refresh">
+      <button onclick="loadProducts()">🔄 Обновить</button>
+      <button class="btn-primary" onclick="openProductModal(null)">+ Добавить продукт</button>
+    </div>
     <div id="productsTable"></div>
   </div>
 
@@ -846,20 +901,74 @@ const ADMIN_HTML = `<!DOCTYPE html>
 
 <!-- Модалка: Продукт -->
 <div class="modal-bg" id="productModal">
-  <div class="modal">
-    <h2>Редактировать продукт</h2>
+  <div class="modal" style="max-width: 720px; max-height: 90vh; overflow-y: auto;">
+    <h2 id="productModalTitle">Продукт</h2>
+
+    <div class="section-title">📋 Основное</div>
     <div class="field">
-      <label>Код</label>
-      <input type="text" id="prodCode" readonly />
+      <label>Код (латиница, без пробелов)</label>
+      <input type="text" id="prodCode" placeholder="my_product" />
     </div>
     <div class="field">
       <label>Название</label>
-      <input type="text" id="prodName" />
+      <input type="text" id="prodName" placeholder="SOVA TRADE BOT" />
+    </div>
+    <div class="field">
+      <label>Категория</label>
+      <select id="prodCategory">
+        <option value="">— выбери —</option>
+        <option value="bot">Bot</option>
+        <option value="api">API</option>
+        <option value="parser">Parser</option>
+        <option value="advisor">Advisor</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Платформа</label>
+      <input type="text" id="prodPlatform" placeholder="Windows / Mac / Linux / Web" />
+    </div>
+    <div class="field">
+      <label>Краткое описание (для карточки)</label>
+      <input type="text" id="prodShort" maxlength="500" placeholder="Что делает продукт одной строкой" />
+    </div>
+    <div class="field">
+      <label>Полное описание</label>
+      <textarea id="prodDesc" rows="3" placeholder="Подробности"></textarea>
+    </div>
+    <div class="field">
+      <label>Цена в USD</label>
+      <input type="number" id="prodPriceUsd" step="0.01" min="0" value="0" />
     </div>
     <div class="field">
       <label>Реферальная ссылка</label>
       <input type="text" id="prodRef" placeholder="https://..." />
     </div>
+
+    <div class="section-title">🎥 Видео</div>
+    <div class="field"><label>Превью</label><input type="text" id="prodVideoPreview" /></div>
+    <div class="field"><label>Как оплатить</label><input type="text" id="prodVideoPayment" /></div>
+    <div class="field"><label>Как установить</label><input type="text" id="prodVideoInstall" /></div>
+    <div class="field"><label>Как пользоваться</label><input type="text" id="prodVideoUsage" /></div>
+
+    <div class="section-title">🔗 Ссылки</div>
+    <div class="field"><label>Соц. сеть / канал</label><input type="text" id="prodSocial" /></div>
+    <div class="field"><label>Ссылка на скачивание</label><input type="text" id="prodDownload" /></div>
+    <div class="field"><label>FAQ (Google Doc)</label><input type="text" id="prodFaq" /></div>
+
+    <div class="section-title">💰 Альтернативные способы оплаты</div>
+    <div class="field"><label>Крипта (адреса кошельков)</label><textarea id="prodCrypto" rows="2"></textarea></div>
+    <div class="field"><label>ЮMoney</label><input type="text" id="prodYoomoney" /></div>
+    <div class="field"><label>Сбер</label><input type="text" id="prodSber" /></div>
+
+    <div class="section-title">📝 Инструкции</div>
+    <div class="field"><label>Как установить (текст)</label><textarea id="prodInstallText" rows="3"></textarea></div>
+    <div class="field"><label>Как пользоваться (текст)</label><textarea id="prodUsageText" rows="3"></textarea></div>
+    <div class="field"><label>Как оплатить (текст)</label><textarea id="prodPaymentText" rows="3"></textarea></div>
+
+    <div class="field">
+      <label><input type="checkbox" id="prodIsActive" style="width:auto;margin-right:6px;" /> Продукт активен</label>
+    </div>
+
     <div class="actions">
       <button onclick="closeProductModal()">Отмена</button>
       <button class="primary" onclick="saveProduct()">Сохранить</button>
@@ -1102,23 +1211,52 @@ async function loadProducts() {
     const rows = allProducts.map(p => \`
       <tr>
         <td><span class="key">\${esc(p.code)}</span></td>
-        <td>\${esc(p.name)}</td>
-        <td>\${p.referral_url ? \`<a href="\${esc(p.referral_url)}" target="_blank" style="font-size:11px">\${esc(p.referral_url.slice(0, 40))}...</a>\` : '<span style="color:#aaa">—</span>'}</td>
+        <td>
+          <div style="font-weight:600">\${esc(p.name)}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px">\${esc(p.short_description || '—')}</div>
+        </td>
+        <td>\${p.price_usd ? '$' + parseFloat(p.price_usd).toFixed(2) : '—'}</td>
+        <td>\${p.referral_url ? \`<a href="\${esc(p.referral_url)}" target="_blank" style="font-size:11px">🔗</a>\` : '<span style="color:#aaa">—</span>'}</td>
         <td>\${p.is_active ? '<span class="badge ok">Вкл</span>' : '<span class="badge gray">Выкл</span>'}</td>
-        <td><button class="btn btn-sm" onclick='openProductModal(\${JSON.stringify(p).replace(/'/g, "&#39;")})'>✏️ Редактировать</button></td>
+        <td>
+          <button class="btn btn-sm" onclick='openProductModal(\${JSON.stringify(p).replace(/'/g, "&#39;")})'>✏️</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteProduct('\${p.code}')">🗑</button>
+        </td>
       </tr>
     \`).join('');
     document.getElementById('productsTable').innerHTML = rows
-      ? \`<table><thead><tr><th>Код</th><th>Название</th><th>Реф-ссылка</th><th>Статус</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+      ? \`<table><thead><tr><th>Код</th><th>Название</th><th>Цена</th><th>Реф</th><th>Статус</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
       : '<div class="empty">Продуктов нет</div>';
   } catch (e) { console.error(e); }
 }
 
 function openProductModal(p) {
   currentProduct = p;
-  document.getElementById('prodCode').value = p.code;
-  document.getElementById('prodName').value = p.name;
-  document.getElementById('prodRef').value = p.referral_url || '';
+  const isNew = !p;
+  document.getElementById('productModalTitle').textContent = isNew ? 'Новый продукт' : ('Редактировать: ' + p.code);
+  document.getElementById('prodCode').value = p ? p.code : '';
+  document.getElementById('prodCode').readOnly = !isNew;
+  document.getElementById('prodName').value = p?.name || '';
+  document.getElementById('prodCategory').value = p?.category || '';
+  document.getElementById('prodPlatform').value = p?.platform || '';
+  document.getElementById('prodShort').value = p?.short_description || '';
+  document.getElementById('prodDesc').value = p?.description || '';
+  document.getElementById('prodPriceUsd').value = p?.price_usd || 0;
+  document.getElementById('prodRef').value = p?.referral_url || '';
+  document.getElementById('prodVideoPreview').value = p?.video_preview_url || '';
+  document.getElementById('prodVideoPayment').value = p?.video_payment_url || '';
+  document.getElementById('prodVideoInstall').value = p?.video_install_url || '';
+  document.getElementById('prodVideoUsage').value = p?.video_usage_url || '';
+  document.getElementById('prodSocial').value = p?.social_url || '';
+  document.getElementById('prodDownload').value = p?.download_url || '';
+  document.getElementById('prodFaq').value = p?.faq_url || '';
+  document.getElementById('prodCrypto').value = p?.payment_crypto || '';
+  document.getElementById('prodYoomoney').value = p?.payment_yoomoney || '';
+  document.getElementById('prodSber').value = p?.payment_sber || '';
+  document.getElementById('prodInstallText').value = p?.install_text || '';
+  document.getElementById('prodUsageText').value = p?.usage_text || '';
+  document.getElementById('prodPaymentText').value = p?.payment_text || '';
+  document.getElementById('prodIsActive').checked = p ? p.is_active : true;
   document.getElementById('productModal').classList.add('active');
 }
 
@@ -1128,18 +1266,56 @@ function closeProductModal() {
 }
 
 async function saveProduct() {
-  if (!currentProduct) return;
+  const payload = {
+    name: document.getElementById('prodName').value.trim(),
+    category: document.getElementById('prodCategory').value.trim(),
+    platform: document.getElementById('prodPlatform').value.trim(),
+    short_description: document.getElementById('prodShort').value.trim(),
+    description: document.getElementById('prodDesc').value.trim(),
+    price_usd: parseFloat(document.getElementById('prodPriceUsd').value) || 0,
+    referral_url: document.getElementById('prodRef').value.trim(),
+    video_preview_url: document.getElementById('prodVideoPreview').value.trim(),
+    video_payment_url: document.getElementById('prodVideoPayment').value.trim(),
+    video_install_url: document.getElementById('prodVideoInstall').value.trim(),
+    video_usage_url: document.getElementById('prodVideoUsage').value.trim(),
+    social_url: document.getElementById('prodSocial').value.trim(),
+    download_url: document.getElementById('prodDownload').value.trim(),
+    faq_url: document.getElementById('prodFaq').value.trim(),
+    payment_crypto: document.getElementById('prodCrypto').value.trim(),
+    payment_yoomoney: document.getElementById('prodYoomoney').value.trim(),
+    payment_sber: document.getElementById('prodSber').value.trim(),
+    install_text: document.getElementById('prodInstallText').value.trim(),
+    usage_text: document.getElementById('prodUsageText').value.trim(),
+    payment_text: document.getElementById('prodPaymentText').value.trim(),
+    is_active: document.getElementById('prodIsActive').checked,
+  };
+
   try {
-    await api('/api/admin/product/update', {
-      method: 'POST',
-      body: JSON.stringify({
-        code: currentProduct.code,
-        name: document.getElementById('prodName').value.trim(),
-        referral_url: document.getElementById('prodRef').value.trim(),
-      }),
-    });
-    toast('Продукт обновлён');
+    if (currentProduct) {
+      payload.code = currentProduct.code;
+      await api('/api/admin/product/update', { method: 'POST', body: JSON.stringify(payload) });
+      toast('Продукт обновлён');
+    } else {
+      payload.code = document.getElementById('prodCode').value.trim();
+      if (!payload.code) return toast('Укажи код', 'err');
+      if (!payload.name) return toast('Укажи название', 'err');
+      await api('/api/admin/product/create', { method: 'POST', body: JSON.stringify(payload) });
+      toast('Продукт создан');
+    }
     closeProductModal();
+    allProducts = [];
+    await ensureProducts();
+    loadProducts();
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'err');
+  }
+}
+
+async function deleteProduct(code) {
+  if (!confirm('Удалить/выключить продукт ' + code + '?')) return;
+  try {
+    const r = await api('/api/admin/product/delete', { method: 'POST', body: JSON.stringify({ code }) });
+    toast(r.message || 'OK');
     allProducts = [];
     await ensureProducts();
     loadProducts();
@@ -1252,7 +1428,9 @@ app.get('/', async (req, res) => {
         referral_track: 'POST /api/referral/track',
         admin_panel: 'GET /admin',
         admin_products: 'GET /api/admin/products',
+        admin_product_create: 'POST /api/admin/product/create',
         admin_product_update: 'POST /api/admin/product/update',
+        admin_product_delete: 'POST /api/admin/product/delete',
       },
       stats: { total_signals: total },
     });

@@ -291,6 +291,44 @@ app.post('/api/license/unbind', checkAdmin, async (req, res) => {
   }
 });
 
+// ============ ПРОДУКТЫ: ПУБЛИЧНЫЙ API (для сайта) ============
+
+app.get('/api/products', async (req, res) => {
+  try {
+    const { cat } = req.query;
+    const where = { is_active: true };
+    if (cat) where.cat = cat;
+
+    const products = await Product.findAll({
+      where,
+      order: [['id', 'ASC']],
+      attributes: { exclude: ['createdAt', 'updatedAt'] },
+    });
+
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json({ total: products.length, products });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/products/:code', async (req, res) => {
+  try {
+    const product = await Product.findOne({
+      where: { code: req.params.code, is_active: true },
+      attributes: { exclude: ['createdAt', 'updatedAt'] },
+    });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json({ product });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ============ ПРОДУКТЫ (для админки) ============
 
 app.get('/api/admin/products', checkAdmin, async (req, res) => {
@@ -312,12 +350,27 @@ app.post('/api/admin/product/update', checkAdmin, async (req, res) => {
     if (!product) return res.status(404).json({ error: 'Product not found' });
 
     const allowed = [
-      'name', 'version', 'category', 'platform', 'short_description', 'description',
-      'price_usd', 'referral_url',
+      // Основное
+      'name', 'version', 'tag', 'cat', 'icon', 'platform', 'product_type',
+      'short_description', 'description',
+      // Видео
+      'video_url', 'poster_url', 'duration',
+      // B2C
+      'private_desc', 'private_features', 'private_price_usd',
+      'private_prefix', 'private_suffix', 'private_note',
+      // B2B
+      'business_desc', 'business_features', 'business_price_usd',
+      'business_prefix', 'business_suffix', 'business_note',
+      // Услуги
+      'service_desc', 'packages',
+      // Ссылки
+      'price_usd', 'referral_url', 'social_url', 'download_url', 'faq_url',
+      // Инструкции
       'video_preview_url', 'video_payment_url', 'video_install_url', 'video_usage_url',
-      'social_url', 'download_url', 'faq_url',
-      'payment_crypto', 'payment_yoomoney', 'payment_sber',
       'install_text', 'usage_text', 'payment_text',
+      // Платежи
+      'payment_crypto', 'payment_yoomoney', 'payment_sber',
+      // Статус
       'is_active',
     ];
     const updates = {};
@@ -737,8 +790,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
     border-bottom: 1px solid #eee;
   }
   .section-title:first-of-type { margin-top: 0; }
-
-  /* ============ MOBILE / ADAPTIVE ============ */
+  .hint { font-size: 11px; color: #999; margin-top: 4px; line-height: 1.4; }
 
   @media (max-width: 900px) {
     .cards { grid-template-columns: repeat(3, 1fr); }
@@ -751,26 +803,16 @@ const ADMIN_HTML = `<!DOCTYPE html>
     .header input { flex: 1; width: auto; min-width: 0; }
     .header button { padding: 8px 14px; }
     .status-msg { display: none; }
-
-    .tabs {
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      padding: 0 12px;
-      scrollbar-width: none;
-    }
+    .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 0 12px; scrollbar-width: none; }
     .tabs::-webkit-scrollbar { display: none; }
     .tab { padding: 12px 14px; font-size: 13px; white-space: nowrap; }
-
     .content { padding: 12px; }
-
     .cards { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
     .card { padding: 14px; }
     .card .label { font-size: 10px; }
     .card .value { font-size: 22px; }
-
     .refresh { flex-wrap: wrap; gap: 6px; }
     .refresh button, .btn { padding: 7px 12px; font-size: 12px; }
-
     #licensesTable, #paymentsTable, #usersTable, #signalsTable, #productsTable {
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
@@ -782,14 +824,12 @@ const ADMIN_HTML = `<!DOCTYPE html>
     }
     table th { padding: 10px 8px; font-size: 10px; }
     table td { padding: 10px 8px; font-size: 12px; }
-
     .modal-bg { padding: 12px; align-items: flex-start; padding-top: 40px; overflow-y: auto; }
     .modal { max-width: 100%; padding: 18px; border-radius: 10px; }
     .modal h2 { font-size: 16px; }
     .modal .field input, .modal .field select { padding: 10px 12px; font-size: 14px; }
     .modal .actions { flex-direction: column-reverse; gap: 6px; }
     .modal .actions button { width: 100%; padding: 10px; }
-
     .toast { left: 12px; right: 12px; bottom: 12px; text-align: center; font-size: 13px; }
   }
 
@@ -901,7 +941,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
 
 <!-- Модалка: Продукт -->
 <div class="modal-bg" id="productModal">
-  <div class="modal" style="max-width: 720px; max-height: 90vh; overflow-y: auto;">
+  <div class="modal" style="max-width: 760px; max-height: 90vh; overflow-y: auto;">
     <h2 id="productModalTitle">Продукт</h2>
 
     <div class="section-title">📋 Основное</div>
@@ -914,56 +954,92 @@ const ADMIN_HTML = `<!DOCTYPE html>
       <input type="text" id="prodName" placeholder="SOVA TRADE BOT" />
     </div>
     <div class="field">
-      <label>Категория</label>
-      <select id="prodCategory">
-        <option value="">— выбери —</option>
-        <option value="bot">Bot</option>
-        <option value="api">API</option>
-        <option value="parser">Parser</option>
-        <option value="advisor">Advisor</option>
+      <label>Тип</label>
+      <select id="prodProductType">
+        <option value="product">Продукт</option>
+        <option value="service">Услуга</option>
       </select>
+    </div>
+    <div class="field">
+      <label>Категория (cat — для фильтров на сайте)</label>
+      <select id="prodCat">
+        <option value="">— выбери —</option>
+        <option value="trade">trade — Трейдинг</option>
+        <option value="crypto">crypto — Крипта</option>
+        <option value="leadgen">leadgen — Лидогенерация</option>
+        <option value="tools">tools — Инструменты</option>
+        <option value="service">service — Услуги</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Тег (короткий, для карточки)</label>
+      <input type="text" id="prodTag" placeholder="Крипта / Трейдинг / Лидогенерация" />
+    </div>
+    <div class="field">
+      <label>Иконка Font Awesome</label>
+      <input type="text" id="prodIcon" placeholder="fa-bitcoin-sign" />
+      <div class="hint">Например: fa-bitcoin-sign, fa-lightbulb, fa-magnifying-glass</div>
     </div>
     <div class="field">
       <label>Платформа</label>
       <input type="text" id="prodPlatform" placeholder="Windows / Mac / Linux / Web" />
     </div>
     <div class="field">
-      <label>Краткое описание (для карточки)</label>
+      <label>Краткое описание (для карточки на сайте)</label>
       <input type="text" id="prodShort" maxlength="500" placeholder="Что делает продукт одной строкой" />
     </div>
     <div class="field">
       <label>Полное описание</label>
       <textarea id="prodDesc" rows="3" placeholder="Подробности"></textarea>
     </div>
-    <div class="field">
-      <label>Цена в USD</label>
-      <input type="number" id="prodPriceUsd" step="0.01" min="0" value="0" />
-    </div>
-    <div class="field">
-      <label>Реферальная ссылка</label>
-      <input type="text" id="prodRef" placeholder="https://..." />
-    </div>
 
-    <div class="section-title">🎥 Видео</div>
-    <div class="field"><label>Превью</label><input type="text" id="prodVideoPreview" /></div>
-    <div class="field"><label>Как оплатить</label><input type="text" id="prodVideoPayment" /></div>
-    <div class="field"><label>Как установить</label><input type="text" id="prodVideoInstall" /></div>
-    <div class="field"><label>Как пользоваться</label><input type="text" id="prodVideoUsage" /></div>
+    <div class="section-title">🎥 Видео и превью</div>
+    <div class="field"><label>Видео (YouTube / MP4)</label><input type="text" id="prodVideoUrl" /></div>
+    <div class="field"><label>Превью (картинка)</label><input type="text" id="prodPosterUrl" /></div>
+    <div class="field"><label>Длительность</label><input type="text" id="prodDuration" placeholder="3:45" /></div>
+
+    <div class="section-title">👤 Частным (B2C)</div>
+    <div class="field"><label>Описание</label><textarea id="prodPrivateDesc" rows="3"></textarea></div>
+    <div class="field"><label>Фичи (по одной на строку)</label><textarea id="prodPrivateFeatures" rows="4" placeholder="30+ готовых стратегий&#10;Бэктест&#10;Уведомления в Telegram"></textarea></div>
+    <div class="field"><label>Цена USD</label><input type="number" id="prodPrivatePriceUsd" step="0.01" min="0" value="0" /></div>
+    <div class="field"><label>Префикс</label><input type="text" id="prodPrivatePrefix" placeholder="от " /></div>
+    <div class="field"><label>Суффикс</label><input type="text" id="prodPrivateSuffix" placeholder=" / мес" /></div>
+    <div class="field"><label>Примечание</label><input type="text" id="prodPrivateNote" placeholder="14 дней бесплатно" /></div>
+
+    <div class="section-title">🏢 Бизнесу (B2B)</div>
+    <div class="field"><label>Описание</label><textarea id="prodBusinessDesc" rows="3"></textarea></div>
+    <div class="field"><label>Фичи (по одной на строку)</label><textarea id="prodBusinessFeatures" rows="4"></textarea></div>
+    <div class="field"><label>Цена USD</label><input type="number" id="prodBusinessPriceUsd" step="0.01" min="0" value="0" /></div>
+    <div class="field"><label>Префикс</label><input type="text" id="prodBusinessPrefix" placeholder="от " /></div>
+    <div class="field"><label>Суффикс</label><input type="text" id="prodBusinessSuffix" placeholder=" / мес" /></div>
+    <div class="field"><label>Примечание</label><input type="text" id="prodBusinessNote" /></div>
+
+    <div class="section-title">📦 Услуга (только для service)</div>
+    <div class="field"><label>Описание услуги</label><textarea id="prodServiceDesc" rows="3"></textarea></div>
+    <div class="field">
+      <label>Пакеты (JSON)</label>
+      <textarea id="prodPackages" rows="6" placeholder='[{"name":"Старт","volume":"500 контактов","priceUSD":99,"featured":false,"features":["..."]}]'></textarea>
+      <div class="hint">Массив объектов: name, volume, priceUSD, featured, features[]</div>
+    </div>
 
     <div class="section-title">🔗 Ссылки</div>
+    <div class="field"><label>Реферальная ссылка</label><input type="text" id="prodRef" placeholder="https://..." /></div>
     <div class="field"><label>Соц. сеть / канал</label><input type="text" id="prodSocial" /></div>
     <div class="field"><label>Ссылка на скачивание</label><input type="text" id="prodDownload" /></div>
     <div class="field"><label>FAQ (Google Doc)</label><input type="text" id="prodFaq" /></div>
 
     <div class="section-title">💰 Альтернативные способы оплаты</div>
-    <div class="field"><label>Крипта (адреса кошельков)</label><textarea id="prodCrypto" rows="2"></textarea></div>
+    <div class="field"><label>Крипта</label><textarea id="prodCrypto" rows="2"></textarea></div>
     <div class="field"><label>ЮMoney</label><input type="text" id="prodYoomoney" /></div>
     <div class="field"><label>Сбер</label><input type="text" id="prodSber" /></div>
 
-    <div class="section-title">📝 Инструкции</div>
-    <div class="field"><label>Как установить (текст)</label><textarea id="prodInstallText" rows="3"></textarea></div>
-    <div class="field"><label>Как пользоваться (текст)</label><textarea id="prodUsageText" rows="3"></textarea></div>
-    <div class="field"><label>Как оплатить (текст)</label><textarea id="prodPaymentText" rows="3"></textarea></div>
+    <div class="section-title">📝 Инструкции (видео + текст)</div>
+    <div class="field"><label>Видео: как оплатить</label><input type="text" id="prodVideoPayment" /></div>
+    <div class="field"><label>Видео: как установить</label><input type="text" id="prodVideoInstall" /></div>
+    <div class="field"><label>Видео: как пользоваться</label><input type="text" id="prodVideoUsage" /></div>
+    <div class="field"><label>Текст: как установить</label><textarea id="prodInstallText" rows="3"></textarea></div>
+    <div class="field"><label>Текст: как пользоваться</label><textarea id="prodUsageText" rows="3"></textarea></div>
+    <div class="field"><label>Текст: как оплатить</label><textarea id="prodPaymentText" rows="3"></textarea></div>
 
     <div class="field">
       <label><input type="checkbox" id="prodIsActive" style="width:auto;margin-right:6px;" /> Продукт активен</label>
@@ -1050,6 +1126,15 @@ function dateToInput(d) {
   const m = String(x.getMonth() + 1).padStart(2, '0');
   const day = String(x.getDate()).padStart(2, '0');
   return y + '-' + m + '-' + day;
+}
+
+function linesToArray(str) {
+  return String(str || '').split('\\n').map(s => s.trim()).filter(Boolean);
+}
+
+function arrayToLines(arr) {
+  if (!Array.isArray(arr)) return '';
+  return arr.join('\\n');
 }
 
 // ===== Дашборд =====
@@ -1215,8 +1300,8 @@ async function loadProducts() {
           <div style="font-weight:600">\${esc(p.name)}</div>
           <div style="font-size:11px;color:#888;margin-top:2px">\${esc(p.short_description || '—')}</div>
         </td>
-        <td>\${p.price_usd ? '$' + parseFloat(p.price_usd).toFixed(2) : '—'}</td>
-        <td>\${p.referral_url ? \`<a href="\${esc(p.referral_url)}" target="_blank" style="font-size:11px">🔗</a>\` : '<span style="color:#aaa">—</span>'}</td>
+        <td>\${p.cat ? '<span class="badge gray">' + esc(p.cat) + '</span>' : '—'}</td>
+        <td>\${p.private_price_usd ? '$' + parseFloat(p.private_price_usd).toFixed(2) : (p.price_usd ? '$' + parseFloat(p.price_usd).toFixed(2) : '—')}</td>
         <td>\${p.is_active ? '<span class="badge ok">Вкл</span>' : '<span class="badge gray">Выкл</span>'}</td>
         <td>
           <button class="btn btn-sm" onclick='openProductModal(\${JSON.stringify(p).replace(/'/g, "&#39;")})'>✏️</button>
@@ -1225,7 +1310,7 @@ async function loadProducts() {
       </tr>
     \`).join('');
     document.getElementById('productsTable').innerHTML = rows
-      ? \`<table><thead><tr><th>Код</th><th>Название</th><th>Цена</th><th>Реф</th><th>Статус</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+      ? \`<table><thead><tr><th>Код</th><th>Название</th><th>Категория</th><th>Цена B2C</th><th>Статус</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
       : '<div class="empty">Продуктов нет</div>';
   } catch (e) { console.error(e); }
 }
@@ -1236,26 +1321,53 @@ function openProductModal(p) {
   document.getElementById('productModalTitle').textContent = isNew ? 'Новый продукт' : ('Редактировать: ' + p.code);
   document.getElementById('prodCode').value = p ? p.code : '';
   document.getElementById('prodCode').readOnly = !isNew;
+
   document.getElementById('prodName').value = p?.name || '';
-  document.getElementById('prodCategory').value = p?.category || '';
+  document.getElementById('prodProductType').value = p?.product_type || 'product';
+  document.getElementById('prodCat').value = p?.cat || '';
+  document.getElementById('prodTag').value = p?.tag || '';
+  document.getElementById('prodIcon').value = p?.icon || '';
   document.getElementById('prodPlatform').value = p?.platform || '';
   document.getElementById('prodShort').value = p?.short_description || '';
   document.getElementById('prodDesc').value = p?.description || '';
-  document.getElementById('prodPriceUsd').value = p?.price_usd || 0;
+
+  document.getElementById('prodVideoUrl').value = p?.video_url || '';
+  document.getElementById('prodPosterUrl').value = p?.poster_url || '';
+  document.getElementById('prodDuration').value = p?.duration || '';
+
+  document.getElementById('prodPrivateDesc').value = p?.private_desc || '';
+  document.getElementById('prodPrivateFeatures').value = arrayToLines(p?.private_features);
+  document.getElementById('prodPrivatePriceUsd').value = p?.private_price_usd || 0;
+  document.getElementById('prodPrivatePrefix').value = p?.private_prefix || '';
+  document.getElementById('prodPrivateSuffix').value = p?.private_suffix || '';
+  document.getElementById('prodPrivateNote').value = p?.private_note || '';
+
+  document.getElementById('prodBusinessDesc').value = p?.business_desc || '';
+  document.getElementById('prodBusinessFeatures').value = arrayToLines(p?.business_features);
+  document.getElementById('prodBusinessPriceUsd').value = p?.business_price_usd || 0;
+  document.getElementById('prodBusinessPrefix').value = p?.business_prefix || '';
+  document.getElementById('prodBusinessSuffix').value = p?.business_suffix || '';
+  document.getElementById('prodBusinessNote').value = p?.business_note || '';
+
+  document.getElementById('prodServiceDesc').value = p?.service_desc || '';
+  document.getElementById('prodPackages').value = p?.packages ? JSON.stringify(p.packages, null, 2) : '';
+
   document.getElementById('prodRef').value = p?.referral_url || '';
-  document.getElementById('prodVideoPreview').value = p?.video_preview_url || '';
-  document.getElementById('prodVideoPayment').value = p?.video_payment_url || '';
-  document.getElementById('prodVideoInstall').value = p?.video_install_url || '';
-  document.getElementById('prodVideoUsage').value = p?.video_usage_url || '';
   document.getElementById('prodSocial').value = p?.social_url || '';
   document.getElementById('prodDownload').value = p?.download_url || '';
   document.getElementById('prodFaq').value = p?.faq_url || '';
+
   document.getElementById('prodCrypto').value = p?.payment_crypto || '';
   document.getElementById('prodYoomoney').value = p?.payment_yoomoney || '';
   document.getElementById('prodSber').value = p?.payment_sber || '';
+
+  document.getElementById('prodVideoPayment').value = p?.video_payment_url || '';
+  document.getElementById('prodVideoInstall').value = p?.video_install_url || '';
+  document.getElementById('prodVideoUsage').value = p?.video_usage_url || '';
   document.getElementById('prodInstallText').value = p?.install_text || '';
   document.getElementById('prodUsageText').value = p?.usage_text || '';
   document.getElementById('prodPaymentText').value = p?.payment_text || '';
+
   document.getElementById('prodIsActive').checked = p ? p.is_active : true;
   document.getElementById('productModal').classList.add('active');
 }
@@ -1266,27 +1378,63 @@ function closeProductModal() {
 }
 
 async function saveProduct() {
+  let packages = null;
+  const pkgRaw = document.getElementById('prodPackages').value.trim();
+  if (pkgRaw) {
+    try {
+      packages = JSON.parse(pkgRaw);
+    } catch (e) {
+      return toast('Пакеты: невалидный JSON', 'err');
+    }
+  }
+
   const payload = {
     name: document.getElementById('prodName').value.trim(),
-    category: document.getElementById('prodCategory').value.trim(),
+    product_type: document.getElementById('prodProductType').value,
+    cat: document.getElementById('prodCat').value.trim(),
+    tag: document.getElementById('prodTag').value.trim(),
+    icon: document.getElementById('prodIcon').value.trim(),
     platform: document.getElementById('prodPlatform').value.trim(),
     short_description: document.getElementById('prodShort').value.trim(),
     description: document.getElementById('prodDesc').value.trim(),
-    price_usd: parseFloat(document.getElementById('prodPriceUsd').value) || 0,
+
+    video_url: document.getElementById('prodVideoUrl').value.trim(),
+    poster_url: document.getElementById('prodPosterUrl').value.trim(),
+    duration: document.getElementById('prodDuration').value.trim(),
+
+    private_desc: document.getElementById('prodPrivateDesc').value.trim(),
+    private_features: linesToArray(document.getElementById('prodPrivateFeatures').value),
+    private_price_usd: parseFloat(document.getElementById('prodPrivatePriceUsd').value) || 0,
+    private_prefix: document.getElementById('prodPrivatePrefix').value.trim(),
+    private_suffix: document.getElementById('prodPrivateSuffix').value.trim(),
+    private_note: document.getElementById('prodPrivateNote').value.trim(),
+
+    business_desc: document.getElementById('prodBusinessDesc').value.trim(),
+    business_features: linesToArray(document.getElementById('prodBusinessFeatures').value),
+    business_price_usd: parseFloat(document.getElementById('prodBusinessPriceUsd').value) || 0,
+    business_prefix: document.getElementById('prodBusinessPrefix').value.trim(),
+    business_suffix: document.getElementById('prodBusinessSuffix').value.trim(),
+    business_note: document.getElementById('prodBusinessNote').value.trim(),
+
+    service_desc: document.getElementById('prodServiceDesc').value.trim(),
+    packages: packages,
+
     referral_url: document.getElementById('prodRef').value.trim(),
-    video_preview_url: document.getElementById('prodVideoPreview').value.trim(),
-    video_payment_url: document.getElementById('prodVideoPayment').value.trim(),
-    video_install_url: document.getElementById('prodVideoInstall').value.trim(),
-    video_usage_url: document.getElementById('prodVideoUsage').value.trim(),
     social_url: document.getElementById('prodSocial').value.trim(),
     download_url: document.getElementById('prodDownload').value.trim(),
     faq_url: document.getElementById('prodFaq').value.trim(),
+
     payment_crypto: document.getElementById('prodCrypto').value.trim(),
     payment_yoomoney: document.getElementById('prodYoomoney').value.trim(),
     payment_sber: document.getElementById('prodSber').value.trim(),
+
+    video_payment_url: document.getElementById('prodVideoPayment').value.trim(),
+    video_install_url: document.getElementById('prodVideoInstall').value.trim(),
+    video_usage_url: document.getElementById('prodVideoUsage').value.trim(),
     install_text: document.getElementById('prodInstallText').value.trim(),
     usage_text: document.getElementById('prodUsageText').value.trim(),
     payment_text: document.getElementById('prodPaymentText').value.trim(),
+
     is_active: document.getElementById('prodIsActive').checked,
   };
 
@@ -1426,6 +1574,8 @@ app.get('/', async (req, res) => {
         payment_create: 'POST /api/payment/create',
         payment_webhook: 'POST /api/payment/webhook',
         referral_track: 'POST /api/referral/track',
+        products_public: 'GET /api/products',
+        product_public: 'GET /api/products/:code',
         admin_panel: 'GET /admin',
         admin_products: 'GET /api/admin/products',
         admin_product_create: 'POST /api/admin/product/create',

@@ -19,7 +19,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ============ УТИЛИТЫ ============
@@ -90,11 +90,11 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// ============ ЛИЦЕНЗИИ ============
+// ============ ЛИЦЕНЗИИ: ПРОВЕРКА ============
 
 app.post('/api/license/check', async (req, res) => {
   try {
-    const { key, device_id, product_code } = req.body;
+    const { key, device_id, account_number, product_code } = req.body;
     if (!key || !product_code) {
       return res.status(400).json({ error: 'Missing key or product_code' });
     }
@@ -115,10 +115,19 @@ app.post('/api/license/check', async (req, res) => {
       return res.json({ status: 'expired', message: 'Лицензия истекла' });
     }
 
-    if (!license.device_id && device_id) {
-      await license.update({ device_id });
-    } else if (license.device_id && device_id && license.device_id !== device_id) {
-      return res.json({ status: 'blocked', message: 'Лицензия привязана к другому устройству' });
+    // Привязка: первый запуск — привязываем; последующие — проверяем
+    if (!license.device_id && !license.account_number) {
+      const updates = {};
+      if (device_id) updates.device_id = device_id;
+      if (account_number) updates.account_number = account_number;
+      if (Object.keys(updates).length) await license.update(updates);
+    } else {
+      if (license.device_id && device_id && license.device_id !== device_id) {
+        return res.json({ status: 'blocked', message: 'Лицензия привязана к другому устройству' });
+      }
+      if (license.account_number && account_number && license.account_number !== account_number) {
+        return res.json({ status: 'blocked', message: 'Лицензия привязана к другому счёту' });
+      }
     }
 
     await license.update({ last_check_at: new Date() });
@@ -135,9 +144,14 @@ app.post('/api/license/check', async (req, res) => {
   }
 });
 
+// ============ ЛИЦЕНЗИИ: АДМИН ============
+
 app.post('/api/license/create', checkAdmin, async (req, res) => {
   try {
-    const { product_code, plan_code = 'demo', email, telegram_id, duration_days } = req.body;
+    const {
+      product_code, plan_code = 'demo', email, telegram_id,
+      duration_days, device_id, account_number, expires_at,
+    } = req.body;
     if (!product_code) {
       return res.status(400).json({ error: 'Missing product_code' });
     }
@@ -156,9 +170,14 @@ app.post('/api/license/create', checkAdmin, async (req, res) => {
       });
     }
 
-    const days = duration_days || plan.duration_days;
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + days);
+    let expiresAt;
+    if (expires_at) {
+      expiresAt = new Date(expires_at);
+    } else {
+      const days = duration_days || plan.duration_days;
+      expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + days);
+    }
 
     const key = generateKey();
     const license = await License.create({
@@ -167,22 +186,15 @@ app.post('/api/license/create', checkAdmin, async (req, res) => {
       product_id: product.id,
       plan_code: plan.code,
       expires_at: expiresAt,
+      device_id: device_id || null,
+      account_number: account_number || null,
       is_active: true,
     });
 
-    res.json({
-      status: 'ok',
-      license: {
-        key: license.key,
-        product: product.code,
-        plan: plan.code,
-        expires_at: license.expires_at,
-        user_id: license.user_id,
-      },
-    });
+    res.json({ status: 'ok', license });
   } catch (error) {
     console.error('License create error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 });
 
@@ -209,6 +221,22 @@ app.get('/api/license/list', checkAdmin, async (req, res) => {
   }
 });
 
+app.post('/api/license/activate', checkAdmin, async (req, res) => {
+  try {
+    const { key } = req.body;
+    if (!key) return res.status(400).json({ error: 'Missing key' });
+
+    const license = await License.findOne({ where: { key } });
+    if (!license) return res.status(404).json({ error: 'License not found' });
+
+    await license.update({ is_active: true });
+    res.json({ status: 'ok', message: 'Лицензия активирована' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.post('/api/license/deactivate', checkAdmin, async (req, res) => {
   try {
     const { key } = req.body;
@@ -219,6 +247,79 @@ app.post('/api/license/deactivate', checkAdmin, async (req, res) => {
 
     await license.update({ is_active: false });
     res.json({ status: 'ok', message: 'Лицензия деактивирована' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/license/update', checkAdmin, async (req, res) => {
+  try {
+    const { key, expires_at, device_id, account_number, plan_code, is_active } = req.body;
+    if (!key) return res.status(400).json({ error: 'Missing key' });
+
+    const license = await License.findOne({ where: { key } });
+    if (!license) return res.status(404).json({ error: 'License not found' });
+
+    const updates = {};
+    if (expires_at) updates.expires_at = new Date(expires_at);
+    if (plan_code) updates.plan_code = plan_code;
+    if (is_active !== undefined) updates.is_active = is_active;
+    if (device_id !== undefined) updates.device_id = device_id || null;
+    if (account_number !== undefined) updates.account_number = account_number || null;
+
+    await license.update(updates);
+    res.json({ status: 'ok', license });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/license/unbind', checkAdmin, async (req, res) => {
+  try {
+    const { key } = req.body;
+    if (!key) return res.status(400).json({ error: 'Missing key' });
+
+    const license = await License.findOne({ where: { key } });
+    if (!license) return res.status(404).json({ error: 'License not found' });
+
+    await license.update({ device_id: null, account_number: null });
+    res.json({ status: 'ok', message: 'Привязки сняты' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============ ПРОДУКТЫ (для админки) ============
+
+app.get('/api/admin/products', checkAdmin, async (req, res) => {
+  try {
+    const products = await Product.findAll({ order: [['id', 'ASC']] });
+    res.json({ total: products.length, products });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/admin/product/update', checkAdmin, async (req, res) => {
+  try {
+    const { code, referral_url, is_active, name, description } = req.body;
+    if (!code) return res.status(400).json({ error: 'Missing code' });
+
+    const product = await Product.findOne({ where: { code } });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    const updates = {};
+    if (referral_url !== undefined) updates.referral_url = referral_url || null;
+    if (is_active !== undefined) updates.is_active = is_active;
+    if (name) updates.name = name;
+    if (description !== undefined) updates.description = description || null;
+
+    await product.update(updates);
+    res.json({ status: 'ok', product });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Internal server error' });
@@ -365,16 +466,12 @@ app.post('/api/payment/webhook', async (req, res) => {
     }
 
     if (!payment && transaction.token) {
-      payment = await Payment.findOne({
-        where: { provider_payment_id: transaction.token },
-      });
+      payment = await Payment.findOne({ where: { provider_payment_id: transaction.token } });
       if (payment) console.log('✅ Payment found by token');
     }
 
     if (!payment) {
-      payment = await Payment.findOne({
-        where: { provider_payment_id: transaction.uid },
-      });
+      payment = await Payment.findOne({ where: { provider_payment_id: transaction.uid } });
       if (payment) console.log('✅ Payment found by uid');
     }
 
@@ -462,7 +559,7 @@ app.post('/api/referral/track', async (req, res) => {
   }
 });
 
-// ============ АДМИНКА: DATA ENDPOINTS ============
+// ============ АДМИН: ДАННЫЕ ============
 
 app.get('/api/admin/stats', checkAdmin, async (req, res) => {
   try {
@@ -529,8 +626,8 @@ const ADMIN_HTML = `<!DOCTYPE html>
   body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f4f5f7; color: #1a1a1a; }
   .header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
   .header h1 { margin: 0; font-size: 20px; }
-  .header .secret { display: flex; gap: 8px; }
-  .header input { padding: 8px 12px; border-radius: 6px; border: 1px solid #444; background: #2a2a3e; color: #fff; width: 280px; font-size: 13px; }
+  .header .secret { display: flex; gap: 8px; align-items: center; }
+  .header input { padding: 8px 12px; border-radius: 6px; border: 1px solid #444; background: #2a2a3e; color: #fff; width: 260px; font-size: 13px; }
   .header button { padding: 8px 16px; border-radius: 6px; border: none; background: #ff9500; color: #fff; font-weight: 600; cursor: pointer; }
   .header button:hover { background: #e08600; }
   .tabs { background: #fff; padding: 0 24px; border-bottom: 1px solid #e0e0e0; display: flex; gap: 4px; }
@@ -540,13 +637,13 @@ const ADMIN_HTML = `<!DOCTYPE html>
   .content { padding: 24px; }
   .panel { display: none; }
   .panel.active { display: block; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
   .card { background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
   .card .label { color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
   .card .value { font-size: 28px; font-weight: 700; color: #1a1a2e; }
   table { width: 100%; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06); border-collapse: collapse; }
   table th { text-align: left; padding: 12px 14px; font-size: 12px; text-transform: uppercase; color: #888; letter-spacing: 0.5px; background: #fafafa; border-bottom: 1px solid #eee; }
-  table td { padding: 12px 14px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  table td { padding: 12px 14px; border-bottom: 1px solid #f0f0f0; font-size: 13px; vertical-align: middle; }
   table tr:last-child td { border-bottom: none; }
   table tr:hover td { background: #fafafa; }
   .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
@@ -554,12 +651,33 @@ const ADMIN_HTML = `<!DOCTYPE html>
   .badge.warn { background: #fff4d4; color: #8a6a00; }
   .badge.err { background: #ffd4d4; color: #8a1a1a; }
   .badge.gray { background: #eee; color: #666; }
-  .empty { text-align: center; padding: 40px; color: #999; }
+  .empty { text-align: center; padding: 40px; color: #999; background: #fff; border-radius: 10px; }
   .key { font-family: monospace; font-size: 12px; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
-  .refresh { margin-bottom: 16px; }
-  .refresh button { padding: 8px 16px; border-radius: 6px; border: 1px solid #ddd; background: #fff; cursor: pointer; font-size: 13px; }
-  .refresh button:hover { background: #f5f5f5; }
+  .refresh { margin-bottom: 16px; display: flex; gap: 8px; }
+  .refresh button, .btn { padding: 8px 14px; border-radius: 6px; border: 1px solid #ddd; background: #fff; cursor: pointer; font-size: 13px; }
+  .refresh button:hover, .btn:hover { background: #f5f5f5; }
+  .btn-primary { background: #ff9500; color: #fff; border-color: #ff9500; }
+  .btn-primary:hover { background: #e08600; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 4px; }
+  .btn-danger { color: #8a1a1a; }
+  .btn-success { color: #1a7a1a; }
   .status-msg { font-size: 13px; color: #888; margin-left: 12px; }
+  .modal-bg { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+  .modal-bg.active { display: flex; }
+  .modal { background: #fff; border-radius: 12px; padding: 24px; width: 100%; max-width: 500px; }
+  .modal h2 { margin: 0 0 16px 0; font-size: 18px; }
+  .modal .field { margin-bottom: 14px; }
+  .modal .field label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .modal .field input, .modal .field textarea, .modal .field select { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; font-family: inherit; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+  .modal .actions button { padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; border: 1px solid #ddd; background: #fff; }
+  .modal .actions button.primary { background: #ff9500; color: #fff; border-color: #ff9500; }
+  .modal .actions button:hover { opacity: 0.9; }
+  .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: 8px; color: #fff; font-size: 14px; z-index: 2000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .toast.ok { background: #1a7a1a; }
+  .toast.err { background: #8a1a1a; }
+  .bind-info { font-size: 11px; color: #888; font-family: monospace; }
 </style>
 </head>
 <body>
@@ -575,6 +693,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
 <div class="tabs">
   <div class="tab active" data-tab="dashboard" onclick="switchTab('dashboard')">Дашборд</div>
   <div class="tab" data-tab="licenses" onclick="switchTab('licenses')">Лицензии</div>
+  <div class="tab" data-tab="products" onclick="switchTab('products')">Продукты</div>
   <div class="tab" data-tab="payments" onclick="switchTab('payments')">Платежи</div>
   <div class="tab" data-tab="users" onclick="switchTab('users')">Клиенты</div>
   <div class="tab" data-tab="signals" onclick="switchTab('signals')">Сигналы</div>
@@ -587,8 +706,16 @@ const ADMIN_HTML = `<!DOCTYPE html>
   </div>
 
   <div class="panel" id="panel-licenses">
-    <div class="refresh"><button onclick="loadLicenses()">🔄 Обновить</button></div>
+    <div class="refresh">
+      <button onclick="loadLicenses()">🔄 Обновить</button>
+      <button class="btn-primary" onclick="openLicenseModal()">+ Создать лицензию</button>
+    </div>
     <div id="licensesTable"></div>
+  </div>
+
+  <div class="panel" id="panel-products">
+    <div class="refresh"><button onclick="loadProducts()">🔄 Обновить</button></div>
+    <div id="productsTable"></div>
   </div>
 
   <div class="panel" id="panel-payments">
@@ -607,9 +734,85 @@ const ADMIN_HTML = `<!DOCTYPE html>
   </div>
 </div>
 
+<!-- Модалка: Лицензия -->
+<div class="modal-bg" id="licenseModal">
+  <div class="modal">
+    <h2 id="licenseModalTitle">Создать лицензию</h2>
+    <div class="field" id="fieldKey" style="display:none;">
+      <label>Ключ</label>
+      <input type="text" id="inpKey" readonly />
+    </div>
+    <div class="field" id="fieldProduct">
+      <label>Продукт</label>
+      <select id="inpProduct"></select>
+    </div>
+    <div class="field" id="fieldPlan">
+      <label>Тариф</label>
+      <select id="inpPlan">
+        <option value="demo">Demo</option>
+        <option value="pro">Pro</option>
+        <option value="vip">VIP</option>
+      </select>
+    </div>
+    <div class="field" id="fieldEmail">
+      <label>Email клиента</label>
+      <input type="email" id="inpEmail" placeholder="client@example.com" />
+    </div>
+    <div class="field">
+      <label>Дата окончания</label>
+      <input type="date" id="inpExpires" />
+    </div>
+    <div class="field">
+      <label>Device ID (железо)</label>
+      <input type="text" id="inpDeviceId" placeholder="оставь пустым, если привязка с клиента" />
+    </div>
+    <div class="field">
+      <label>Account Number (номер счёта)</label>
+      <input type="text" id="inpAccount" placeholder="оставь пустым, если привязка с клиента" />
+    </div>
+    <div class="actions">
+      <button onclick="closeLicenseModal()">Отмена</button>
+      <button class="primary" onclick="saveLicense()" id="saveLicenseBtn">Создать</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: Продукт -->
+<div class="modal-bg" id="productModal">
+  <div class="modal">
+    <h2>Редактировать продукт</h2>
+    <div class="field">
+      <label>Код</label>
+      <input type="text" id="prodCode" readonly />
+    </div>
+    <div class="field">
+      <label>Название</label>
+      <input type="text" id="prodName" />
+    </div>
+    <div class="field">
+      <label>Реферальная ссылка</label>
+      <input type="text" id="prodRef" placeholder="https://..." />
+    </div>
+    <div class="actions">
+      <button onclick="closeProductModal()">Отмена</button>
+      <button class="primary" onclick="saveProduct()">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
 let secret = localStorage.getItem('sova_secret') || '';
 document.getElementById('secretInput').value = secret;
+let allProducts = [];
+
+function toast(msg, type = 'ok') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  setTimeout(() => t.className = 'toast ' + type, 2500);
+}
 
 function login() {
   secret = document.getElementById('secretInput').value.trim();
@@ -640,13 +843,17 @@ function loadCurrentTab() {
   currentTab = active.dataset.tab;
   if (currentTab === 'dashboard') loadDashboard();
   if (currentTab === 'licenses') loadLicenses();
+  if (currentTab === 'products') loadProducts();
   if (currentTab === 'payments') loadPayments();
   if (currentTab === 'users') loadUsers();
   if (currentTab === 'signals') loadSignals();
 }
 
-async function api(path) {
-  const r = await fetch(path, { headers: { 'x-admin-secret': secret } });
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    ...opts,
+    headers: { 'x-admin-secret': secret, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
@@ -660,6 +867,16 @@ function fmtDate(d) {
   return new Date(d).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
 }
 
+function dateToInput(d) {
+  if (!d) return '';
+  const x = new Date(d);
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, '0');
+  const day = String(x.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + day;
+}
+
+// ===== Дашборд =====
 async function loadDashboard() {
   try {
     const s = await api('/api/admin/stats');
@@ -674,25 +891,195 @@ async function loadDashboard() {
   } catch (e) { console.error(e); }
 }
 
+// ===== Лицензии =====
 async function loadLicenses() {
   try {
     const d = await api('/api/license/list?limit=200');
-    const rows = (d.licenses || []).map(l => \`
-      <tr>
-        <td><span class="key">\${esc(l.key)}</span></td>
-        <td>\${esc(l.Product ? l.Product.name : '—')}</td>
-        <td>\${esc(l.plan_code)}</td>
-        <td>\${l.is_active ? '<span class="badge ok">Активна</span>' : '<span class="badge gray">Отключена</span>'}</td>
-        <td>\${fmtDate(l.expires_at)}</td>
-        <td>\${fmtDate(l.createdAt)}</td>
-      </tr>
-    \`).join('');
+    const rows = (d.licenses || []).map(l => {
+      const bindDevice = l.device_id ? \`<div class="bind-info">device: \${esc(l.device_id.slice(0, 16))}...</div>\` : '';
+      const bindAccount = l.account_number ? \`<div class="bind-info">acc: \${esc(l.account_number)}</div>\` : '';
+      const bind = (bindDevice || bindAccount) ? (bindDevice + bindAccount) : '<span style="color:#aaa">—</span>';
+      return \`
+        <tr>
+          <td><span class="key">\${esc(l.key)}</span></td>
+          <td>\${esc(l.Product ? l.Product.name : '—')}</td>
+          <td>\${esc(l.plan_code)}</td>
+          <td>\${l.is_active ? '<span class="badge ok">Активна</span>' : '<span class="badge gray">Отключена</span>'}</td>
+          <td>\${fmtDate(l.expires_at)}</td>
+          <td>\${bind}</td>
+          <td>
+            <button class="btn btn-sm" onclick='openLicenseModal(\${JSON.stringify(l).replace(/'/g, "&#39;")})'>✏️</button>
+            \${l.is_active
+              ? \`<button class="btn btn-sm btn-danger" onclick="deactivateLicense('\${l.key}')">🔒</button>\`
+              : \`<button class="btn btn-sm btn-success" onclick="activateLicense('\${l.key}')">🔓</button>\`
+            }
+            <button class="btn btn-sm" onclick="copyKey('\${l.key}')">📋</button>
+          </td>
+        </tr>
+      \`;
+    }).join('');
     document.getElementById('licensesTable').innerHTML = rows
-      ? \`<table><thead><tr><th>Ключ</th><th>Продукт</th><th>Тариф</th><th>Статус</th><th>До</th><th>Создана</th></tr></thead><tbody>\${rows}</tbody></table>\`
+      ? \`<table><thead><tr><th>Ключ</th><th>Продукт</th><th>Тариф</th><th>Статус</th><th>До</th><th>Привязка</th><th>Действия</th></tr></thead><tbody>\${rows}</tbody></table>\`
       : '<div class="empty">Лицензий пока нет</div>';
   } catch (e) { console.error(e); }
 }
 
+let currentLicense = null;
+
+async function openLicenseModal(license) {
+  await ensureProducts();
+  const modal = document.getElementById('licenseModal');
+  const title = document.getElementById('licenseModalTitle');
+  const saveBtn = document.getElementById('saveLicenseBtn');
+  const selProduct = document.getElementById('inpProduct');
+  const fieldKey = document.getElementById('fieldKey');
+  const fieldProduct = document.getElementById('fieldProduct');
+  const fieldEmail = document.getElementById('fieldEmail');
+
+  selProduct.innerHTML = allProducts.map(p => \`<option value="\${p.code}">\${esc(p.name)} (\${esc(p.code)})</option>\`).join('');
+
+  if (license) {
+    currentLicense = license;
+    title.textContent = 'Редактировать лицензию';
+    saveBtn.textContent = 'Сохранить';
+    fieldKey.style.display = 'block';
+    fieldProduct.style.display = 'none';
+    fieldEmail.style.display = 'none';
+    document.getElementById('inpKey').value = license.key;
+    document.getElementById('inpPlan').value = license.plan_code;
+    document.getElementById('inpExpires').value = dateToInput(license.expires_at);
+    document.getElementById('inpDeviceId').value = license.device_id || '';
+    document.getElementById('inpAccount').value = license.account_number || '';
+    document.getElementById('inpEmail').value = '';
+  } else {
+    currentLicense = null;
+    title.textContent = 'Создать лицензию';
+    saveBtn.textContent = 'Создать';
+    fieldKey.style.display = 'none';
+    fieldProduct.style.display = 'block';
+    fieldEmail.style.display = 'block';
+    document.getElementById('inpKey').value = '';
+    document.getElementById('inpPlan').value = 'pro';
+    const def = new Date(); def.setDate(def.getDate() + 30);
+    document.getElementById('inpExpires').value = dateToInput(def);
+    document.getElementById('inpDeviceId').value = '';
+    document.getElementById('inpAccount').value = '';
+    document.getElementById('inpEmail').value = '';
+  }
+  modal.classList.add('active');
+}
+
+function closeLicenseModal() {
+  document.getElementById('licenseModal').classList.remove('active');
+  currentLicense = null;
+}
+
+async function saveLicense() {
+  try {
+    const payload = {
+      plan_code: document.getElementById('inpPlan').value,
+      expires_at: document.getElementById('inpExpires').value || null,
+      device_id: document.getElementById('inpDeviceId').value.trim(),
+      account_number: document.getElementById('inpAccount').value.trim(),
+    };
+    if (currentLicense) {
+      payload.key = currentLicense.key;
+      await api('/api/license/update', { method: 'POST', body: JSON.stringify(payload) });
+      toast('Лицензия обновлена');
+    } else {
+      payload.product_code = document.getElementById('inpProduct').value;
+      payload.email = document.getElementById('inpEmail').value.trim();
+      const r = await api('/api/license/create', { method: 'POST', body: JSON.stringify(payload) });
+      toast('Лицензия создана: ' + r.license.key);
+    }
+    closeLicenseModal();
+    loadLicenses();
+  } catch (e) {
+    toast('Ошибка: ' + e.message, 'err');
+  }
+}
+
+async function activateLicense(key) {
+  try {
+    await api('/api/license/activate', { method: 'POST', body: JSON.stringify({ key }) });
+    toast('Лицензия активирована');
+    loadLicenses();
+  } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
+}
+
+async function deactivateLicense(key) {
+  if (!confirm('Деактивировать лицензию ' + key + '?')) return;
+  try {
+    await api('/api/license/deactivate', { method: 'POST', body: JSON.stringify({ key }) });
+    toast('Лицензия деактивирована');
+    loadLicenses();
+  } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
+}
+
+function copyKey(key) {
+  navigator.clipboard.writeText(key).then(() => toast('Скопировано: ' + key));
+}
+
+// ===== Продукты =====
+async function ensureProducts() {
+  if (allProducts.length) return;
+  const d = await api('/api/admin/products');
+  allProducts = d.products || [];
+}
+
+let currentProduct = null;
+
+async function loadProducts() {
+  try {
+    await ensureProducts();
+    const rows = allProducts.map(p => \`
+      <tr>
+        <td><span class="key">\${esc(p.code)}</span></td>
+        <td>\${esc(p.name)}</td>
+        <td>\${p.referral_url ? \`<a href="\${esc(p.referral_url)}" target="_blank" style="font-size:11px">\${esc(p.referral_url.slice(0, 40))}...</a>\` : '<span style="color:#aaa">—</span>'}</td>
+        <td>\${p.is_active ? '<span class="badge ok">Вкл</span>' : '<span class="badge gray">Выкл</span>'}</td>
+        <td><button class="btn btn-sm" onclick='openProductModal(\${JSON.stringify(p).replace(/'/g, "&#39;")})'>✏️ Редактировать</button></td>
+      </tr>
+    \`).join('');
+    document.getElementById('productsTable').innerHTML = rows
+      ? \`<table><thead><tr><th>Код</th><th>Название</th><th>Реф-ссылка</th><th>Статус</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+      : '<div class="empty">Продуктов нет</div>';
+  } catch (e) { console.error(e); }
+}
+
+function openProductModal(p) {
+  currentProduct = p;
+  document.getElementById('prodCode').value = p.code;
+  document.getElementById('prodName').value = p.name;
+  document.getElementById('prodRef').value = p.referral_url || '';
+  document.getElementById('productModal').classList.add('active');
+}
+
+function closeProductModal() {
+  document.getElementById('productModal').classList.remove('active');
+  currentProduct = null;
+}
+
+async function saveProduct() {
+  if (!currentProduct) return;
+  try {
+    await api('/api/admin/product/update', {
+      method: 'POST',
+      body: JSON.stringify({
+        code: currentProduct.code,
+        name: document.getElementById('prodName').value.trim(),
+        referral_url: document.getElementById('prodRef').value.trim(),
+      }),
+    });
+    toast('Продукт обновлён');
+    closeProductModal();
+    allProducts = [];
+    await ensureProducts();
+    loadProducts();
+  } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
+}
+
+// ===== Платежи =====
 async function loadPayments() {
   try {
     const d = await api('/api/admin/payments');
@@ -716,6 +1103,7 @@ async function loadPayments() {
   } catch (e) { console.error(e); }
 }
 
+// ===== Клиенты =====
 async function loadUsers() {
   try {
     const d = await api('/api/admin/users');
@@ -735,6 +1123,7 @@ async function loadUsers() {
   } catch (e) { console.error(e); }
 }
 
+// ===== Сигналы =====
 async function loadSignals() {
   try {
     const d = await api('/api/get_signals');
@@ -757,7 +1146,7 @@ async function loadSignals() {
   } catch (e) { console.error(e); }
 }
 
-// Автозагрузка, если secret уже сохранён
+// Автозагрузка
 if (secret) {
   fetch('/api/admin/stats', { headers: { 'x-admin-secret': secret } })
     .then(r => r.ok ? loadCurrentTab() : null)
@@ -787,11 +1176,16 @@ app.get('/', async (req, res) => {
         license_check: 'POST /api/license/check',
         license_create: 'POST /api/license/create',
         license_list: 'GET /api/license/list',
+        license_activate: 'POST /api/license/activate',
         license_deactivate: 'POST /api/license/deactivate',
+        license_update: 'POST /api/license/update',
+        license_unbind: 'POST /api/license/unbind',
         payment_create: 'POST /api/payment/create',
         payment_webhook: 'POST /api/payment/webhook',
         referral_track: 'POST /api/referral/track',
         admin_panel: 'GET /admin',
+        admin_products: 'GET /api/admin/products',
+        admin_product_update: 'POST /api/admin/product/update',
       },
       stats: { total_signals: total },
     });
@@ -812,7 +1206,6 @@ app.get('/', async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Не удалось подключиться к БД:', err.message);
-    console.error('Проверь DATABASE_URL в .env или в Environment на Render');
     process.exit(1);
   }
 })();

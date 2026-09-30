@@ -656,7 +656,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
   .refresh { margin-bottom: 16px; display: flex; gap: 8px; }
   .refresh button, .btn { padding: 8px 14px; border-radius: 6px; border: 1px solid #ddd; background: #fff; cursor: pointer; font-size: 13px; }
   .refresh button:hover, .btn:hover { background: #f5f5f5; }
-  .btn-primary { background: #ff9500; color: #fff; border-color: #ff9500; }
+ .btn-primary:hover, .refresh .btn-primary:hover { background: #e08600; }
   .btn-primary:hover { background: #e08600; }
   .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 4px; }
   .btn-danger { color: #8a1a1a; }

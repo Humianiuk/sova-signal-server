@@ -678,6 +678,73 @@ const ADMIN_HTML = `<!DOCTYPE html>
   .toast.ok { background: #1a7a1a; }
   .toast.err { background: #8a1a1a; }
   .bind-info { font-size: 11px; color: #888; font-family: monospace; }
+  /* ============ MOBILE / ADAPTIVE ============ */
+
+  @media (max-width: 900px) {
+    .cards { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  @media (max-width: 768px) {
+    /* Шапка */
+    .header { flex-direction: column; gap: 10px; align-items: stretch; padding: 12px 14px; }
+    .header h1 { font-size: 17px; text-align: center; }
+    .header .secret { width: 100%; }
+    .header input { flex: 1; width: auto; min-width: 0; }
+    .header button { padding: 8px 14px; }
+    .status-msg { display: none; }
+
+    /* Табы — скролл по горизонтали */
+    .tabs {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 0 12px;
+      scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab { padding: 12px 14px; font-size: 13px; white-space: nowrap; }
+
+    /* Контент */
+    .content { padding: 12px; }
+
+    /* Карточки дашборда — 2 в ряд */
+    .cards { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
+    .card { padding: 14px; }
+    .card .label { font-size: 10px; }
+    .card .value { font-size: 22px; }
+
+    /* Кнопки над таблицей */
+    .refresh { flex-wrap: wrap; gap: 6px; }
+    .refresh button, .btn { padding: 7px 12px; font-size: 12px; }
+
+    /* Таблицы — горизонтальный скролл */
+    #licensesTable, #paymentsTable, #usersTable, #signalsTable, #productsTable {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      border-radius: 10px;
+    }
+    #licensesTable table, #paymentsTable table, #usersTable table,
+    #signalsTable table, #productsTable table {
+      min-width: 720px;
+    }
+    table th { padding: 10px 8px; font-size: 10px; }
+    table td { padding: 10px 8px; font-size: 12px; }
+
+    /* Модалки */
+    .modal-bg { padding: 12px; align-items: flex-start; padding-top: 40px; overflow-y: auto; }
+    .modal { max-width: 100%; padding: 18px; border-radius: 10px; }
+    .modal h2 { font-size: 16px; }
+    .modal .field input, .modal .field select { padding: 10px 12px; font-size: 14px; }
+    .modal .actions { flex-direction: column-reverse; gap: 6px; }
+    .modal .actions button { width: 100%; padding: 10px; }
+
+    /* Toast */
+    .toast { left: 12px; right: 12px; bottom: 12px; text-align: center; font-size: 13px; }
+  }
+
+  @media (max-width: 380px) {
+    .cards { grid-template-columns: 1fr; }
+    .header h1 { font-size: 15px; }
+  }  
 </style>
 </head>
 <body>

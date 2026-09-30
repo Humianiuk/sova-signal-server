@@ -13,7 +13,7 @@ const { sequelize, Plan } = require('./src/models');
     }
 
     const oldPrice = plan.price;
-    await plan.update({ price: 1 });
+    await plan.update({ price: 29 });
     console.log(`✅ Цена pro: ${oldPrice} → 1 ${plan.currency}`);
 
     process.exit(0);

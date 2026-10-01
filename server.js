@@ -350,27 +350,18 @@ app.post('/api/admin/product/update', checkAdmin, async (req, res) => {
     if (!product) return res.status(404).json({ error: 'Product not found' });
 
     const allowed = [
-      // Основное
       'name', 'version', 'tag', 'cat', 'icon', 'platform', 'product_type',
       'short_description', 'description',
-      // Видео
       'video_url', 'poster_url', 'duration',
-      // B2C
       'private_desc', 'private_features', 'private_price_usd',
       'private_prefix', 'private_suffix', 'private_note',
-      // B2B
       'business_desc', 'business_features', 'business_price_usd',
       'business_prefix', 'business_suffix', 'business_note',
-      // Услуги
       'service_desc', 'packages',
-      // Ссылки
       'price_usd', 'referral_url', 'social_url', 'download_url', 'faq_url',
-      // Инструкции
       'video_preview_url', 'video_payment_url', 'video_install_url', 'video_usage_url',
       'install_text', 'usage_text', 'payment_text',
-      // Платежи
       'payment_crypto', 'payment_yoomoney', 'payment_sber',
-      // Статус
       'is_active',
     ];
     const updates = {};
@@ -432,7 +423,7 @@ app.post('/api/admin/product/delete', checkAdmin, async (req, res) => {
 
 app.post('/api/payment/create', async (req, res) => {
   try {
-    const { product_code, plan_code, email, telegram_id } = req.body;
+    const { product_code, plan_code, email, telegram_id, custom_amount } = req.body;
 
     if (!product_code || !plan_code || (!email && !telegram_id)) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -444,7 +435,9 @@ app.post('/api/payment/create', async (req, res) => {
     const plan = await Plan.findOne({ where: { code: plan_code } });
     if (!plan) return res.status(404).json({ error: 'Plan not found' });
 
-    const amount = Math.round(plan.price * 100);
+    // Если пришла custom_amount (BYN) — используем её, иначе plan.price
+    const priceValue = custom_amount ? parseFloat(custom_amount) : parseFloat(plan.price);
+    const amount = Math.round(priceValue * 100);
     const trackingId = `${product_code}_${plan_code}_${Date.now()}`;
 
     const bepaidResponse = await axios.post(
@@ -504,7 +497,7 @@ app.post('/api/payment/create', async (req, res) => {
     }
 
     const payment = await Payment.create({
-      amount: plan.price,
+      amount: priceValue,
       currency: plan.currency,
       status: 'pending',
       provider: 'bepaid',
@@ -515,6 +508,7 @@ app.post('/api/payment/create', async (req, res) => {
         plan_code,
         email,
         telegram_id,
+        custom_amount: custom_amount || null,
       },
     });
 

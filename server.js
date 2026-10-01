@@ -423,7 +423,7 @@ app.post('/api/admin/product/delete', checkAdmin, async (req, res) => {
 
 app.post('/api/payment/create', async (req, res) => {
   try {
-    const { product_code, plan_code, email, telegram_id, custom_amount, account_number } = req.body;
+    const { product_code, plan_code, email, telegram_id, custom_amount, custom_currency, account_number } = req.body;
 
     if (!product_code || !plan_code || (!email && !telegram_id)) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -437,6 +437,7 @@ app.post('/api/payment/create', async (req, res) => {
 
     // Если пришла custom_amount (BYN) — используем её, иначе plan.price
     const priceValue = custom_amount ? parseFloat(custom_amount) : parseFloat(plan.price);
+    const currencyValue = custom_currency || plan.currency;
     const amount = Math.round(priceValue * 100);
     const trackingId = `${product_code}_${plan_code}_${Date.now()}`;
 
@@ -448,7 +449,7 @@ app.post('/api/payment/create', async (req, res) => {
           attempts: 3,
           test: false,
           order: {
-            currency: plan.currency,
+            currency: currencyValue,
             amount: amount,
             description: `${product.name} - ${plan.name}`,
             tracking_id: trackingId,
@@ -498,7 +499,7 @@ app.post('/api/payment/create', async (req, res) => {
 
     const payment = await Payment.create({
       amount: priceValue,
-      currency: plan.currency,
+      currency: currencyValue,
       status: 'pending',
       provider: 'bepaid',
       provider_payment_id: token,
@@ -509,6 +510,7 @@ app.post('/api/payment/create', async (req, res) => {
         email,
         telegram_id,
         custom_amount: custom_amount || null,
+        custom_currency: currencyValue,
         account_number: account_number || null,
       },
     });

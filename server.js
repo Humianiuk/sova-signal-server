@@ -369,7 +369,6 @@ app.post('/api/license/demo', async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'Product not found' });
     }
 
-    // Проверка: не выдавали ли уже demo для этого устройства?
     const existingDemo = await License.findOne({
       where: {
         product_id: product.id,
@@ -387,7 +386,6 @@ app.post('/api/license/demo', async (req, res) => {
       });
     }
 
-    // Создаём demo-лицензию на 7 дней
     const plan = await Plan.findOne({ where: { code: 'demo' } });
     const days = plan ? plan.duration_days : 7;
 
@@ -526,7 +524,7 @@ app.post('/api/payment/create', async (req, res) => {
     const plan = await Plan.findOne({ where: { code: plan_code } });
     if (!plan) return res.status(404).json({ error: 'Plan not found' });
 
-    // Если пришла custom_amount (BYN) — используем её, иначе plan.price
+    // Если пришла custom_amount — используем её, иначе plan.price
     const priceValue = custom_amount ? parseFloat(custom_amount) : parseFloat(plan.price);
     const currencyValue = custom_currency || plan.currency;
     const amount = Math.round(priceValue * 100);
@@ -1660,6 +1658,8 @@ app.get('/', async (req, res) => {
         license_deactivate: 'POST /api/license/deactivate',
         license_update: 'POST /api/license/update',
         license_unbind: 'POST /api/license/unbind',
+        license_demo: 'POST /api/license/demo',
+        bot_config: 'GET /api/bot/config/:product_code',
         payment_create: 'POST /api/payment/create',
         payment_webhook: 'POST /api/payment/webhook',
         referral_track: 'POST /api/referral/track',

@@ -329,6 +329,97 @@ app.get('/api/products/:code', async (req, res) => {
   }
 });
 
+// ============ BOT CONFIG (публичный API для бота) ============
+
+app.get('/api/bot/config/:product_code', async (req, res) => {
+  try {
+    const product = await Product.findOne({
+      where: { code: req.params.product_code, is_active: true },
+    });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json({
+      broker_url: product.referral_url || '',
+      referral_url: product.referral_url || '',
+      product_name: product.name,
+      product_version: product.version,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============ ОДНОРАЗОВОЕ ДЕМО ============
+
+app.post('/api/license/demo', async (req, res) => {
+  try {
+    const { device_id, product_code } = req.body;
+
+    if (!device_id || !product_code) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Missing device_id or product_code',
+      });
+    }
+
+    const product = await Product.findOne({ where: { code: product_code } });
+    if (!product) {
+      return res.status(404).json({ status: 'error', message: 'Product not found' });
+    }
+
+    // Проверка: не выдавали ли уже demo для этого устройства?
+    const existingDemo = await License.findOne({
+      where: {
+        product_id: product.id,
+        device_id: device_id,
+        plan_code: 'demo',
+      },
+    });
+
+    if (existingDemo) {
+      console.log('⚠️ Demo already used for device:', device_id);
+      return res.json({
+        status: 'used',
+        message: 'Демо уже использовалось на этом устройстве. Купите лицензию.',
+        referral_url: product.referral_url || '',
+      });
+    }
+
+    // Создаём demo-лицензию на 7 дней
+    const plan = await Plan.findOne({ where: { code: 'demo' } });
+    const days = plan ? plan.duration_days : 7;
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + days);
+
+    const key = generateKey();
+    const license = await License.create({
+      key,
+      product_id: product.id,
+      plan_code: 'demo',
+      device_id: device_id,
+      expires_at: expiresAt,
+      is_active: true,
+    });
+
+    console.log('✅ Demo license created:', key, '| device:', device_id);
+
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json({
+      status: 'ok',
+      key: license.key,
+      plan: 'demo',
+      expires_at: license.expires_at,
+      referral_url: product.referral_url || '',
+    });
+  } catch (error) {
+    console.error('Demo activation error:', error);
+    res.status(500).json({ status: 'error', message: 'Internal server error' });
+  }
+});
+
 // ============ ПРОДУКТЫ (для админки) ============
 
 app.get('/api/admin/products', checkAdmin, async (req, res) => {

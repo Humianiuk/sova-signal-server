@@ -423,7 +423,7 @@ app.post('/api/admin/product/delete', checkAdmin, async (req, res) => {
 
 app.post('/api/payment/create', async (req, res) => {
   try {
-    const { product_code, plan_code, email, telegram_id, custom_amount } = req.body;
+    const { product_code, plan_code, email, telegram_id, custom_amount, account_number } = req.body;
 
     if (!product_code || !plan_code || (!email && !telegram_id)) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -509,6 +509,7 @@ app.post('/api/payment/create', async (req, res) => {
         email,
         telegram_id,
         custom_amount: custom_amount || null,
+        account_number: account_number || null,
       },
     });
 
@@ -587,7 +588,7 @@ app.post('/api/payment/webhook', async (req, res) => {
     }
 
     const meta = payment.raw_payload || {};
-    const { product_code, plan_code, email, telegram_id } = meta;
+    const { product_code, plan_code, email, telegram_id, account_number } = meta;
 
     if (!product_code || !plan_code) {
       console.error('❌ Missing product_code/plan_code in payment meta');
@@ -620,6 +621,7 @@ app.post('/api/payment/webhook', async (req, res) => {
       product_id: product.id,
       plan_code: plan.code,
       expires_at: expiresAt,
+      account_number: account_number || null,
       is_active: true,
     });
 

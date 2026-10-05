@@ -115,16 +115,21 @@ app.post('/api/license/check', async (req, res) => {
       return res.json({ status: 'expired', message: 'Лицензия истекла' });
     }
 
-    if (!license.device_id && !license.account_number) {
+    if (!license.device_id) {
+      // Первая активация — жёстко привязываем к железу и счёту
       const updates = {};
       if (device_id) updates.device_id = device_id;
       if (account_number) updates.account_number = account_number;
       if (Object.keys(updates).length) await license.update(updates);
+      console.log(`🔒 License ${license.key} bound to device: ${device_id}`);
     } else {
-      if (license.device_id && device_id && license.device_id !== device_id) {
+      // Последующие запуски — проверяем совпадение
+      if (device_id && license.device_id !== device_id) {
+        console.warn(`❌ License ${license.key} blocked: device mismatch (${license.device_id} ≠ ${device_id})`);
         return res.json({ status: 'blocked', message: 'Лицензия привязана к другому устройству' });
       }
-      if (license.account_number && account_number && license.account_number !== account_number) {
+      if (account_number && license.account_number && license.account_number !== account_number) {
+        console.warn(`❌ License ${license.key} blocked: account mismatch`);
         return res.json({ status: 'blocked', message: 'Лицензия привязана к другому счёту' });
       }
     }

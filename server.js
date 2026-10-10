@@ -622,6 +622,81 @@ app.post('/api/payment/create', async (req, res) => {
   }
 });
 
+// ============ EMAIL (Resend) ============
+
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+async function sendLicenseEmail(to, licenseKey, product, plan, expiresAt) {
+  if (!to) {
+    console.log('⚠️ No email for license, skipping send');
+    return;
+  }
+  if (!process.env.RESEND_API_KEY) {
+    console.error('⚠️ RESEND_API_KEY not set, skipping email');
+    return;
+  }
+
+  const expiresStr = new Date(expiresAt).toLocaleDateString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric'
+  });
+
+  const downloadUrl = product.download_url || 'https://sovabot.com';
+  const html = `
+    <div style="font-family: -apple-system, sans-serif; max-width: 560px; margin: 0 auto; background: #0f1825; color: #e8eef5; border-radius: 16px; padding: 40px 32px;">
+      <div style="text-align: center; margin-bottom: 32px;">
+        <div style="font-size: 48px;">🦉</div>
+        <h1 style="color: #ff9500; font-family: sans-serif; font-size: 22px; margin: 12px 0 0;">SOVA TRADE BOT</h1>
+      </div>
+
+      <h2 style="color: #fff; font-size: 20px; text-align: center; margin-bottom: 24px;">Оплата прошла успешно</h2>
+
+      <div style="background: #1a2534; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+        <div style="color: #8b9bb3; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Ваш лицензионный ключ</div>
+        <div style="font-family: monospace; font-size: 20px; color: #00e676; font-weight: 700; letter-spacing: 2px; word-break: break-all;">${licenseKey}</div>
+      </div>
+
+      <div style="background: #1a2534; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+        <div style="color: #8b9bb3; font-size: 13px; line-height: 1.8;">
+          <div><b style="color: #fff;">Продукт:</b> ${product.name}</div>
+          <div><b style="color: #fff;">Тариф:</b> ${plan.name}</div>
+          <div><b style="color: #fff;">Действует до:</b> ${expiresStr}</div>
+        </div>
+      </div>
+
+      <div style="text-align: center; margin-bottom: 24px;">
+        <a href="${downloadUrl}" style="display: inline-block; background: #ff9500; color: #0f1825; padding: 14px 32px; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 14px;">Скачать программу</a>
+      </div>
+
+      <div style="color: #8b9bb3; font-size: 13px; line-height: 1.7;">
+        <b style="color: #fff;">Что делать дальше:</b>
+        <ol style="padding-left: 20px; margin: 12px 0;">
+          <li>Скачайте и установите программу</li>
+          <li>Запустите — откроется форма активации</li>
+          <li>Введите ключ выше и ID торгового счёта</li>
+        </ol>
+      </div>
+
+      <div style="margin-top: 32px; padding-top: 24px; border-top: 1px solid #2a3a52; text-align: center; color: #6b7a90; font-size: 12px;">
+        Нужна помощь? <a href="mailto:Lecha1211@mail.ru" style="color: #ff9500;">Lecha1211@mail.ru</a><br>
+        <a href="https://sovabot.com" style="color: #ff9500;">sovabot.com</a>
+      </div>
+    </div>
+  `;
+
+  try {
+    const result = await resend.emails.send({
+      from: 'SOVA <noreply@sovabot.com>',
+      to: [to],
+      subject: `Ваш лицензионный ключ SOVA — ${licenseKey}`,
+      html,
+    });
+    console.log('📧 Email sent:', result.id || 'ok', '→', to);
+  } catch (err) {
+    console.error('❌ Email send error:', err.message);
+  }
+}
+
 app.post('/api/payment/webhook', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -727,9 +802,12 @@ app.post('/api/payment/webhook', async (req, res) => {
       plan_id: plan.id,
     });
 
-    console.log('✅ ЛИЦЕНЗИЯ ВЫДАНА:', key, '| email:', email, '| product:', product_code);
+  console.log('✅ ЛИЦЕНЗИЯ ВЫДАНА:', key, '| email:', email, '| product:', product_code);
 
-    res.status(200).json({ status: 'ok', license_key: key });
+// Отправляем письмо с ключом
+await sendLicenseEmail(email, key, product, plan, expiresAt);
+
+res.status(200).json({ status: 'ok', license_key: key });
   } catch (error) {
     console.error('Webhook error:', error);
     res.status(500).json({ error: 'Internal server error' });

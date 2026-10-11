@@ -722,7 +722,7 @@ async function sendLicenseEmail(to, licenseKey, product, plan, expiresAt) {
 
   try {
     const result = await resend.emails.send({
-      from: 'SOVA <onboarding@resend.dev>',
+      from: 'SOVA <noreply@sovabot.com>',
       to: [to],
       subject: `Ваш лицензионный ключ SOVA — ${licenseKey}`,
       html,

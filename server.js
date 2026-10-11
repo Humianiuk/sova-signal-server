@@ -513,6 +513,31 @@ app.post('/api/admin/product/delete', checkAdmin, async (req, res) => {
   }
 });
 
+
+// ============ TELEGRAM NOTIFICATIONS ============
+
+async function sendTelegram(message) {
+  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
+    console.log('⚠️ Telegram not configured, skip');
+    return;
+  }
+  try {
+    await axios.post(
+      `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        chat_id: process.env.TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+      }
+    );
+    console.log('📱 Telegram sent');
+  } catch (err) {
+    console.error('❌ Telegram error:', err.message);
+  }
+}
+
+
 // ============ ПЛАТЕЖИ (BePaid) ============
 
 app.post('/api/payment/create', async (req, res) => {
@@ -616,6 +641,17 @@ app.post('/api/payment/create', async (req, res) => {
       payment_id: payment.id,
       tracking_id: trackingId,
     });
+
+    // Уведомление в Telegram — попытка оплаты
+    sendTelegram(
+      `💳 <b>Новая попытка оплаты</b>\n\n` +
+      `📦 Продукт: ${product.name}\n` +
+      `💰 Сумма: ${priceValue} ${currencyValue}\n` +
+      `📧 Email: ${email || '—'}\n` +
+      `🆔 Счёт: ${account_number || '—'}\n` +
+      `📊 Payment ID: ${payment.id}`
+    ).catch(() => {});
+
   } catch (error) {
     console.error('BePaid create payment error:', error.response?.data || error.message);
     res.status(500).json({ error: 'Internal server error', details: error.response?.data });
@@ -802,10 +838,21 @@ app.post('/api/payment/webhook', async (req, res) => {
       plan_id: plan.id,
     });
 
-  console.log('✅ ЛИЦЕНЗИЯ ВЫДАНА:', key, '| email:', email, '| product:', product_code);
+    console.log('✅ ЛИЦЕНЗИЯ ВЫДАНА:', key, '| email:', email, '| product:', product_code);
 
-// Отправляем письмо с ключом
-await sendLicenseEmail(email, key, product, plan, expiresAt);
+    // Отправляем письмо с ключом
+    await sendLicenseEmail(email, key, product, plan, expiresAt);
+
+    // Уведомление в Telegram — оплата получена
+    sendTelegram(
+      `✅ <b>ОПЛАТА ПОЛУЧЕНА</b>\n\n` +
+      `📦 Продукт: ${product.name}\n` +
+      `💰 ${payment.amount} ${payment.currency}\n` +
+      `📧 Email: ${email || '—'}\n` +
+      `🆔 Счёт: ${account_number || '—'}\n` +
+      `🔑 Ключ: <code>${key}</code>\n` +
+      `📅 До: ${expiresAt.toLocaleDateString('ru-RU')}`
+    ).catch(() => {});
 
 res.status(200).json({ status: 'ok', license_key: key });
   } catch (error) {

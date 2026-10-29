@@ -1814,6 +1814,11 @@ app.get('/', async (req, res) => {
   try {
     await sequelize.authenticate();
     console.log('✅ БД подключена');
+    
+    // ЭТА СТРОКА АВТОМАТИЧЕСКИ СОЗДАСТ ВСЕ НУЖНЫЕ ТАБЛИЦЫ В НОВОЙ БАЗЕ
+    await sequelize.sync({ alter: true }); 
+    console.log('✅ Таблицы синхронизированы');
+
     app.listen(port, () => {
       console.log(`🚀 SOVA Server on port ${port}`);
       console.log(`🦉 Admin panel: /admin`);

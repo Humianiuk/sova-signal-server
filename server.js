@@ -20,6 +20,13 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+app.use((req, res, next) => {
+  console.log(`📡 Входящий запрос: ${req.method} ${req.originalUrl}`);
+  if (Object.keys(req.body).length > 0) {
+    console.log(`   Данные:`, JSON.stringify(req.body));
+  }
+  next();
+});
 app.use(express.urlencoded({ extended: true }));
 
 // ============ УТИЛИТЫ ============
